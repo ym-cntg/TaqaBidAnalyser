@@ -9,7 +9,12 @@ wheels/
 # Virtual environments
 .venv
 
+# env
+.env
+
 # user files
 data/
 archieved/
+project_details/
+CLAUDE.md
 

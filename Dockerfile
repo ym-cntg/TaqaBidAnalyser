@@ -37,7 +37,9 @@ COPY --from=frontend-builder /frontend/.next/static ./frontend/.next/static
 COPY --from=frontend-builder /frontend/public ./frontend/public
 
 # Nginx config
+RUN rm -f /etc/nginx/sites-enabled/default
 COPY nginx.container.conf /etc/nginx/sites-available/default
+RUN ln -s /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
 
 COPY start.sh ./
 RUN chmod +x start.sh

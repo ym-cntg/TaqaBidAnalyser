@@ -22,3 +22,12 @@ npm run dev
 ```
 
 - UI: http://localhost:3000
+
+
+### Docker
+
+```bash
+docker compose up --build
+```
+
+- UI: http://localhost

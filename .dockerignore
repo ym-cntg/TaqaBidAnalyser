@@ -1,0 +1,14 @@
+.venv
+.git
+.claude
+__pycache__
+*.pyc
+frontend/node_modules
+frontend/.next
+output/
+temp/
+utilities/
+archieved/
+project_details/
+*.egg-info
+uv.lock

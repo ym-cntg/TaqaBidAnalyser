@@ -17,4 +17,6 @@ data/
 archieved/
 project_details/
 CLAUDE.md
-
+temp/
+utilities/output
+output/

@@ -1,5 +1,6 @@
 """Extract structured BOQ data from Excel files."""
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -47,15 +48,23 @@ class BOQExtraction:
     total_contract_price: float | None = None
 
 
+INCLUDED_MARKERS = {"included", "inc", "incl", "included above", "included in"}
+NOT_APPLICABLE = {"", "-", "n/a", "na", "nil", "no boq item"}
+
+
 def _safe_float(val) -> float | None:
     if val is None:
         return None
     if isinstance(val, (int, float)):
         return float(val)
     if isinstance(val, str):
-        cleaned = val.strip().replace(",", "").replace(" ", "")
-        if cleaned in ("", "-", "N/A", "Included", "n/a"):
+        cleaned = val.strip().replace(",", "")
+        lower = cleaned.lower()
+        if lower in NOT_APPLICABLE:
             return None
+        # "Included" means price is bundled in another item — treat as explicit 0
+        if lower in INCLUDED_MARKERS or lower.startswith("included"):
+            return 0.0
         try:
             return float(cleaned)
         except ValueError:
@@ -77,10 +86,39 @@ def _is_section_header(row_vals: list) -> bool:
     return has_item and has_desc and has_no_pricing
 
 
+def _find_included_parents_in_sheet(ws, col_count: int) -> set[str]:
+    """Scan for 'Included in BOQ item X' patterns to find parent items.
+
+    When a sub-item says "Included in BOQ item 3.3", all sibling sub-items
+    under 3.3 are implicitly bundled into the parent's price.
+    """
+    parents: set[str] = set()
+    # Check pricing columns for "Included in" text
+    price_cols = [4, 5, 8] if col_count >= 9 else [4, 5]
+    for row in ws.iter_rows(min_row=1, values_only=True):
+        for col_idx in price_cols:
+            if col_idx < len(row):
+                val = row[col_idx]
+                if val and isinstance(val, str) and "included in" in val.lower():
+                    m = re.search(r"item\s+(\d[\d.]*)", val, re.IGNORECASE)
+                    if m:
+                        parents.add(m.group(1))
+    return parents
+
+
+def _is_sub_item_of(item_no: str, parents: set[str]) -> bool:
+    """Check if item_no is a sub-item of any included parent."""
+    for parent in parents:
+        if item_no.startswith(parent + ".") and item_no != parent:
+            return True
+    return False
+
+
 def _parse_detail_sheet(ws, col_count: int) -> list[BOQItem]:
     """Parse a detail sheet (Items 1-3, Item 4, Items 5-8, or Item 9)."""
     items = []
     header_row = None
+    included_parents = _find_included_parents_in_sheet(ws, col_count)
 
     for row_idx, row in enumerate(ws.iter_rows(min_row=1, values_only=True), 1):
         # Find the header row with "Item" / "Description"
@@ -108,9 +146,18 @@ def _parse_detail_sheet(ws, col_count: int) -> list[BOQItem]:
         # Skip sub-total/total rows
         if description and any(
             kw in str(description).lower()
-            for kw in ["sub total", "total price", "total contract"]
+            for kw in ["sub total", "subtotal", "total price", "total contract",
+                        "grand total", "total lot", "u.a.e. dirhams"]
         ):
             continue
+
+        # Skip total rows in item_no field (e.g., "Item-1 Sub Total", recap rows)
+        if item_no:
+            item_lower = item_no.lower().strip()
+            if any(kw in item_lower for kw in ("sub total", "grand total", "total")):
+                continue
+            if re.match(r"^item\s*-?\s*\d+$", item_lower):
+                continue
 
         if item_no is None and description is None:
             continue
@@ -150,20 +197,30 @@ def _parse_detail_sheet(ws, col_count: int) -> list[BOQItem]:
             and cif_total is None
         )
 
+        # Sub-items under an "Included in BOQ item X" parent with no pricing
+        # are implicitly bundled — treat as 0.0 (not unquoted)
+        has_no_pricing = all(v is None for v in (cif_rate, cif_total, erect_rate, erect_total, total))
+        bundled = (
+            has_no_pricing
+            and qty is not None
+            and item_no is not None
+            and _is_sub_item_of(item_no, included_parents)
+        )
+
         items.append(
             BOQItem(
                 item_no=item_no or "",
                 description=description or "",
                 unit=unit,
                 qty=qty,
-                cif_unit_rate=cif_rate,
-                cif_total=cif_total,
-                erection_unit_rate=erect_rate,
-                erection_total=erect_total,
-                total=total,
+                cif_unit_rate=0.0 if bundled else cif_rate,
+                cif_total=0.0 if bundled else cif_total,
+                erection_unit_rate=0.0 if bundled else erect_rate,
+                erection_total=0.0 if bundled else erect_total,
+                total=0.0 if bundled else total,
                 is_section_header=is_header,
-                raw_cif=raw_cif,
-                raw_erection=raw_erect,
+                raw_cif="Bundled in parent" if bundled else raw_cif,
+                raw_erection="Bundled in parent" if bundled else raw_erect,
             )
         )
 

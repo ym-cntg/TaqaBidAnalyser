@@ -76,10 +76,16 @@ def _detect_flags(
             if item.is_section_header or not item.item_no:
                 continue
 
-            # Unquoted items
-            if item.total is None and item.cif_total is None and item.erection_total is None:
+            # Unquoted items — only flag if qty exists but no pricing at all
+            if (
+                item.qty is not None
+                and item.qty > 0
+                and item.total is None
+                and item.cif_total is None
+                and item.erection_total is None
+            ):
                 raw = item.raw_cif or ""
-                if "included" not in raw.lower():
+                if "included" not in raw.lower() and "bundled" not in raw.lower():
                     flags.append(Flag(
                         severity="warning",
                         category="unquoted",

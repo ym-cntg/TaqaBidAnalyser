@@ -8,7 +8,8 @@ import logging
 from pathlib import Path
 
 from .cache import load_cached, save_cached
-from .excel_parser import BOQExtraction, BOQLot, parse_bidder_folder as _parse_excel_bidder
+from .excel_parser import BOQExtraction, BOQItem, BOQLot, parse_bidder_folder as _parse_excel_bidder
+from .ocr_parser import _detect_lot_boundaries, _items_to_lot, LOT_NAMES
 from .pdf_parser import parse_pdf_boq
 
 logger = logging.getLogger(__name__)
@@ -47,16 +48,36 @@ def _extract_pdf_pymupdf(pdf_path: Path) -> list[BOQLot]:
 
     # Fix lot detection using filename (more reliable than first-page text)
     fname_lot_name, fname_lot_num = _detect_lot_from_filename(pdf_path.name)
-    if fname_lot_num != 0 and lot.lot_number != fname_lot_num:
-        lot = BOQLot(
-            lot_name=fname_lot_name,
-            lot_number=fname_lot_num,
-            sheets=lot.sheets,
-            total_cif=lot.total_cif,
-            total_erection=lot.total_erection,
-            total_price=lot.total_price,
-        )
 
+    if fname_lot_num != 0:
+        # Single-lot PDF — apply filename-based lot number
+        if lot.lot_number != fname_lot_num:
+            lot = BOQLot(
+                lot_name=fname_lot_name,
+                lot_number=fname_lot_num,
+                sheets=lot.sheets,
+                total_cif=lot.total_cif,
+                total_erection=lot.total_erection,
+                total_price=lot.total_price,
+            )
+        return [lot]
+
+    # Multi-lot PDF (filename mentions all lots or is generic)
+    # Try splitting by detecting item number resets
+    all_items: list[BOQItem] = []
+    for sheet in lot.sheets:
+        all_items.extend(sheet.items)
+
+    lot_items = _detect_lot_boundaries(all_items)
+    if len(lot_items) > 1:
+        lots = []
+        for lot_num, items in sorted(lot_items.items()):
+            lot_name = LOT_NAMES.get(lot_num, f"Lot {lot_num}")
+            lots.append(_items_to_lot(items, lot_name, lot_num))
+        logger.info("Split multi-lot PDF %s into %d lots", pdf_path.name, len(lots))
+        return lots
+
+    # Could not split — return as-is with lot_number=0
     return [lot]
 
 
@@ -131,12 +152,24 @@ def parse_bidder_folder_pdf(bidder_path: Path, bidder_name: str) -> list[BOQExtr
         if pdf_dir.exists():
             pdf_files = sorted(pdf_dir.glob("*.pdf"))
             # Filter out cover letters, summaries, and non-BOQ files
-            boq_pdfs = [
-                f for f in pdf_files
-                if not any(skip in f.name.lower() for skip in (
-                    "cover", "letter", "certificate", "summary", "icvmatch",
-                ))
-            ]
+            boq_pdfs = []
+            for f in pdf_files:
+                lower = f.name.lower()
+                # Skip obvious non-BOQ files
+                skip_exact = ("cover", "letter", "certificate", "icvmatch",
+                              "company profile", "manpower", "trade license",
+                              "financial statement", "financial_", "organization",
+                              "cv ", "approval", "experience", "running projects",
+                              "bidder_overview", "overview_", "hse award",
+                              "icv certificate")
+                if any(skip in lower for skip in skip_exact):
+                    logger.debug("Skipping non-BOQ file: %s", f.name)
+                    continue
+                # Skip "summary" only if it doesn't also contain "boq" or "lot"
+                if "summary" in lower and "boq" not in lower and "lot" not in lower:
+                    logger.debug("Skipping summary file: %s", f.name)
+                    continue
+                boq_pdfs.append(f)
 
             for pdf_file in boq_pdfs:
                 pdf_lots = extract_pdf(pdf_file)
@@ -146,9 +179,20 @@ def parse_bidder_folder_pdf(bidder_path: Path, bidder_name: str) -> list[BOQExtr
                     if lot.lot_number not in existing_nums or lot.lot_number == 0:
                         lots.append(lot)
 
-        # Fall back to Excel if PDF extraction produced nothing
-        if not lots and excel_dir.exists():
-            logger.info("Falling back to Excel for %s/%s", bidder_name, round_name)
+        # Fall back to Excel if PDF extraction produced nothing usable
+        # Also fall back if we got unsplit multi-lot data and Excel exists
+        has_only_unknown_lots = lots and all(l.lot_number == 0 for l in lots)
+        # Detect likely unsplit multi-lot: single lot with excessive items (>500)
+        has_oversized_lot = (
+            len(lots) == 1
+            and sum(len(s.items) for lot in lots for s in lot.sheets) > 500
+        )
+        needs_fallback = not lots or has_only_unknown_lots or has_oversized_lot
+        if needs_fallback and excel_dir.exists() and list(excel_dir.glob("*.xlsx")):
+            if has_only_unknown_lots or has_oversized_lot:
+                logger.info("PDF produced unsplit multi-lot data for %s/%s — falling back to Excel", bidder_name, round_name)
+            else:
+                logger.info("Falling back to Excel for %s/%s", bidder_name, round_name)
             excel_extractions = _parse_excel_bidder(bidder_path, bidder_name)
             for ext in excel_extractions:
                 if ext.round_name == round_name:

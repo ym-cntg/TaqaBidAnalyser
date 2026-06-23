@@ -8,10 +8,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml ./
-# Install Python dependencies
+# Install all Python dependencies from pyproject.toml
 RUN pip install --no-cache-dir \
     fastapi uvicorn python-dotenv python-multipart \
-    openpyxl pymupdf pandas
+    openpyxl pymupdf pandas \
+    anthropic azure-ai-documentintelligence azure-core
 
 COPY backend/ ./backend/
 COPY data/ ./data/

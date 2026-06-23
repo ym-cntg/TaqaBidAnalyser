@@ -12,3 +12,4 @@ archieved/
 project_details/
 *.egg-info
 uv.lock
+.cache

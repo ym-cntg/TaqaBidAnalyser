@@ -7,8 +7,8 @@ from pathlib import Path
 
 from fastapi import APIRouter, File, UploadFile, HTTPException
 
-from ..extraction.excel_parser import parse_lot_file, parse_bidder_folder
-from ..extraction.pdf_parser import parse_pdf_boq
+from ..extraction.excel_parser import parse_lot_file
+from ..extraction.router import parse_bidder_folder_pdf as parse_bidder_folder, extract_pdf
 from ..analysis.comparator import compare_round
 from .serializers import (
     serialize_extraction,
@@ -27,7 +27,11 @@ _bidder_cache: dict[str, list] = {}  # "bidder_path" -> parsed extractions
 
 
 def _get_bidder_extractions(bidder_path: Path, bidder_name: str):
-    """Parse bidder folder once, return cached result on subsequent calls."""
+    """Parse bidder folder once, return cached result on subsequent calls.
+
+    Uses PDF extraction (with Azure fallback for scanned docs),
+    falling back to Excel when no PDFs are available.
+    """
     key = str(bidder_path)
     if key not in _bidder_cache:
         _bidder_cache[key] = parse_bidder_folder(bidder_path, bidder_name)
@@ -54,10 +58,10 @@ async def upload_file(file: UploadFile = File(...), bidder: str = "", round_name
         if suffix == ".xlsx":
             lot = parse_lot_file(tmp_path)
         else:
-            try:
-                lot = parse_pdf_boq(tmp_path)
-            except ValueError as e:
-                raise HTTPException(422, str(e))
+            lots = extract_pdf(Path(tmp_path))
+            if not lots:
+                raise HTTPException(422, "Could not extract BOQ data from this PDF")
+            lot = lots[0]  # For upload, return the first lot
 
         upload_id = str(uuid.uuid4())[:8]
         lot_data = serialize_lot(lot)
@@ -113,9 +117,10 @@ async def list_sample_bidders():
         if d.is_dir():
             rounds = sorted([
                 r.name for r in d.iterdir()
-                if r.is_dir() and (r / "excel").exists()
+                if r.is_dir() and ((r / "excel").exists() or (r / "pdf").exists())
             ])
-            bidders.append({"name": d.name, "rounds": rounds})
+            if rounds:
+                bidders.append({"name": d.name, "rounds": rounds})
     return bidders
 
 
@@ -165,7 +170,7 @@ async def list_sample_rounds():
         if not bidder_dir.is_dir():
             continue
         for round_dir in bidder_dir.iterdir():
-            if round_dir.is_dir() and (round_dir / "excel").exists():
+            if round_dir.is_dir() and ((round_dir / "excel").exists() or (round_dir / "pdf").exists()):
                 rounds.add(round_dir.name)
 
     return sorted(rounds)

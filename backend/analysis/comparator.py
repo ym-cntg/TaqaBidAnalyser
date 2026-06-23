@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass
 from ..extraction.excel_parser import BOQExtraction, BOQLot
+from .item_matcher import match_items
 
 
 @dataclass(frozen=True)
@@ -11,6 +12,8 @@ class ComparisonItem:
     unit: str | None
     qty: float | None
     bidder_prices: dict[str, dict]  # bidder_name -> {cif_total, erection_total, total}
+    match_method: str = "exact"  # "exact", "normalized", "fuzzy", "llm", "unmatched"
+    match_confidence: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -157,13 +160,124 @@ def _detect_flags(
     return flags
 
 
+def _sort_key(item_no: str) -> list[float]:
+    """Sort item numbers numerically (e.g., 1.2.3 before 1.10.1)."""
+    return [float(p) if p.replace(".", "").isdigit() else 0 for p in item_no.split(".")]
+
+
+def _match_bidders_for_lot(
+    bidder_items: dict[str, dict[str, dict]],
+) -> tuple[list[ComparisonItem], dict[str, str]]:
+    """Match items across all bidders for a single lot using 4-tier matching.
+
+    For >2 bidders, we pick the first bidder as reference and match each
+    other bidder against it. Items only in non-reference bidders are added
+    as unmatched.
+
+    Returns:
+        (comparison_items, canonical_map) where canonical_map maps
+        bidder-specific item_no -> canonical item_no used in comparison.
+    """
+    bidder_names = list(bidder_items.keys())
+    if not bidder_names:
+        return [], {}
+
+    reference_bidder = bidder_names[0]
+    ref_items = bidder_items[reference_bidder]
+
+    # Maps: canonical_item_no -> {bidder_name -> original_item_no}
+    # Canonical = the reference bidder's item_no
+    item_mapping: dict[str, dict[str, str]] = {}
+    match_info: dict[str, tuple[str, float]] = {}  # canonical -> (method, confidence)
+
+    # Initialize with reference bidder (all exact by definition)
+    for item_no in ref_items:
+        item_mapping[item_no] = {reference_bidder: item_no}
+        match_info[item_no] = ("exact", 1.0)
+
+    # Match each other bidder against the reference
+    for bidder_name in bidder_names[1:]:
+        other_items = bidder_items[bidder_name]
+        matches, unmatched_a_keys, unmatched_b_keys = match_items(ref_items, other_items)
+
+        for m in matches:
+            canonical = m.item_no_a  # reference bidder's item_no
+            if canonical not in item_mapping:
+                item_mapping[canonical] = {reference_bidder: canonical}
+            item_mapping[canonical][bidder_name] = m.item_no_b
+
+            # Track the lowest-confidence match method for this canonical item
+            existing_method, existing_conf = match_info.get(canonical, ("exact", 1.0))
+            if m.confidence < existing_conf:
+                match_info[canonical] = (m.match_method, m.confidence)
+
+        # Items only in this bidder (no match in reference)
+        for key_b in unmatched_b_keys:
+            item_mapping[key_b] = {bidder_name: key_b}
+            match_info[key_b] = ("unmatched", 0.0)
+
+    # Build ComparisonItems
+    comparison_items = []
+    for canonical in sorted(item_mapping.keys(), key=_sort_key):
+        bidder_map = item_mapping[canonical]
+        method, confidence = match_info.get(canonical, ("exact", 1.0))
+
+        # Get description/unit/qty from first bidder that has it
+        desc, unit, qty = "", None, None
+        for bn, orig_key in bidder_map.items():
+            data = bidder_items[bn].get(orig_key, {})
+            if data:
+                desc = data.get("description", "")
+                unit = data.get("unit")
+                qty = data.get("qty")
+                break
+
+        # Build prices from each bidder using their original item_no
+        prices = {}
+        for bidder_name in bidder_names:
+            orig_key = bidder_map.get(bidder_name)
+            if orig_key and orig_key in bidder_items[bidder_name]:
+                d = bidder_items[bidder_name][orig_key]
+                prices[bidder_name] = {
+                    "cif_total": d["cif_total"],
+                    "erection_total": d["erection_total"],
+                    "total": d["total"],
+                }
+            else:
+                prices[bidder_name] = {
+                    "cif_total": None,
+                    "erection_total": None,
+                    "total": None,
+                }
+
+        # Skip section headers: items where no bidder has any pricing
+        has_any_price = any(
+            p.get("total") is not None or p.get("cif_total") is not None
+            for p in prices.values()
+        )
+        if not has_any_price:
+            continue
+
+        comparison_items.append(ComparisonItem(
+            item_no=canonical,
+            description=desc,
+            unit=unit,
+            qty=qty,
+            bidder_prices=prices,
+            match_method=method,
+            match_confidence=confidence,
+        ))
+
+    return comparison_items
+
+
 def compare_round(
     extractions: dict[str, BOQExtraction],
     round_name: str,
 ) -> ComparisonResult:
     """Compare all bidders for a given round."""
     # Collect item maps per bidder per lot
-    bidder_lot_items: dict[int, dict[str, dict[str, dict]]] = {}  # lot_num -> bidder -> items
+    bidder_lot_items: dict[int, dict[str, dict[str, dict]]] = {}
 
     for bidder_name, extraction in extractions.items():
         for lot in extraction.lots:
@@ -177,49 +291,10 @@ def compare_round(
     for lot_num in sorted(bidder_lot_items.keys()):
         bidder_items = bidder_lot_items[lot_num]
 
-        # Collect all unique item numbers across bidders
-        all_item_nos = set()
-        for items in bidder_items.values():
-            all_item_nos.update(items.keys())
+        # Use 4-tier matching
+        comparison_items = _match_bidders_for_lot(bidder_items)
 
-        # Build comparison items
-        comparison_items = []
-        for item_no in sorted(all_item_nos, key=lambda x: [float(p) if p.replace(".", "").isdigit() else 0 for p in x.split(".")]):
-            # Get description from first bidder that has it
-            desc = ""
-            unit = None
-            qty = None
-            for items in bidder_items.values():
-                if item_no in items:
-                    desc = items[item_no]["description"]
-                    unit = items[item_no]["unit"]
-                    qty = items[item_no]["qty"]
-                    break
-
-            prices = {}
-            for bidder_name, items in bidder_items.items():
-                if item_no in items:
-                    prices[bidder_name] = {
-                        "cif_total": items[item_no]["cif_total"],
-                        "erection_total": items[item_no]["erection_total"],
-                        "total": items[item_no]["total"],
-                    }
-                else:
-                    prices[bidder_name] = {
-                        "cif_total": None,
-                        "erection_total": None,
-                        "total": None,
-                    }
-
-            comparison_items.append(ComparisonItem(
-                item_no=item_no,
-                description=desc,
-                unit=unit,
-                qty=qty,
-                bidder_prices=prices,
-            ))
-
-        # Lot-level totals
+        # Lot-level totals and flags
         bidder_totals = {}
         lot_name = f"Lot {lot_num}"
         for bidder_name, extraction in extractions.items():
@@ -231,7 +306,6 @@ def compare_round(
                         "erection": lot.total_erection,
                         "total": lot.total_price,
                     }
-                    # Detect flags
                     all_flags.extend(
                         _detect_flags(bidder_name, lot, bidder_items.get(bidder_name, {}), bidder_items)
                     )
@@ -243,7 +317,6 @@ def compare_round(
             bidder_totals=bidder_totals,
         ))
 
-    # Grand totals
     grand_totals = {}
     for bidder_name, extraction in extractions.items():
         grand_totals[bidder_name] = extraction.total_contract_price

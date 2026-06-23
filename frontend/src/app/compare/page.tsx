@@ -39,6 +39,14 @@ function getPriceColor(
   return "";
 }
 
+const MATCH_STYLES: Record<string, { label: string; className: string; dot: string }> = {
+  exact: { label: "Exact", className: "bg-green-100 text-green-800 border-green-300", dot: "bg-green-500" },
+  normalized: { label: "Normalized", className: "bg-blue-100 text-blue-800 border-blue-300", dot: "bg-blue-500" },
+  fuzzy: { label: "Fuzzy", className: "bg-amber-100 text-amber-800 border-amber-300", dot: "bg-amber-500" },
+  llm: { label: "AI Match", className: "bg-purple-100 text-purple-800 border-purple-300", dot: "bg-purple-500" },
+  unmatched: { label: "Unmatched", className: "bg-red-100 text-red-800 border-red-300", dot: "bg-red-500" },
+};
+
 export default function ComparePage() {
   const [rounds, setRounds] = useState<string[]>([]);
   const [selectedRound, setSelectedRound] = useState<string>("");
@@ -163,14 +171,31 @@ export default function ComparePage() {
         </div>
       )}
 
-      {/* Search */}
-      <input
-        type="text"
-        placeholder="Search items..."
-        value={searchTerm}
-        onChange={(e) => setSearchTerm(e.target.value)}
-        className="w-full md:w-80 rounded-lg border border-border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
-      />
+      {/* Search + Match Legend */}
+      <div className="flex flex-wrap items-center gap-4">
+        <input
+          type="text"
+          placeholder="Search items..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="w-full md:w-80 rounded-lg border border-border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+        />
+        {currentLot && (
+          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            <span className="font-medium">Match quality:</span>
+            {Object.entries(MATCH_STYLES).map(([key, style]) => {
+              const count = currentLot.items.filter((i) => i.match_method === key).length;
+              if (count === 0) return null;
+              return (
+                <span key={key} className="flex items-center gap-1">
+                  <span className={`inline-block w-2 h-2 rounded-full ${style.dot}`} />
+                  {style.label} ({count})
+                </span>
+              );
+            })}
+          </div>
+        )}
+      </div>
 
       {/* Comparison Table */}
       {loading ? (
@@ -217,7 +242,17 @@ export default function ComparePage() {
                         className="border-t border-border hover:bg-muted/20"
                       >
                         <td className="px-3 py-2 font-mono text-xs sticky left-0 bg-background">
-                          {item.item_no}
+                          <span className="flex items-center gap-1.5">
+                            <span className="relative group">
+                              <span
+                                className={`inline-block w-2 h-2 rounded-full flex-shrink-0 cursor-help ${MATCH_STYLES[item.match_method]?.dot ?? ""}`}
+                              />
+                              <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 rounded text-[10px] font-sans whitespace-nowrap bg-foreground text-background opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                                {MATCH_STYLES[item.match_method]?.label ?? item.match_method} ({Math.round(item.match_confidence * 100)}%)
+                              </span>
+                            </span>
+                            {item.item_no}
+                          </span>
                         </td>
                         <td className="px-3 py-2 text-muted-foreground max-w-[300px]">
                           <span className="line-clamp-1">

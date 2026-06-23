@@ -1,10 +1,13 @@
 """Extract structured BOQ data from PDF files using PyMuPDF."""
 
+import logging
 from pathlib import Path
 
 import fitz
 
 from .excel_parser import BOQItem, BOQLot, BOQSheet
+
+logger = logging.getLogger(__name__)
 
 
 def _safe_float(val: str | None) -> float | None:
@@ -144,9 +147,7 @@ def parse_pdf_boq(filepath: str | Path) -> BOQLot:
                     sheets_dict[current_sheet_name].append(item)
 
     if not sheets_dict:
-        # No tables found — likely a scanned PDF, try OCR
-        from .ocr_parser import parse_scanned_boq
-        return parse_scanned_boq(filepath)
+        return None
 
     sheets = tuple(
         BOQSheet(name=name, items=tuple(items))

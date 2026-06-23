@@ -73,6 +73,8 @@ def serialize_comparison_item(item: ComparisonItem) -> dict:
         "unit": item.unit,
         "qty": item.qty,
         "bidder_prices": item.bidder_prices,
+        "match_method": item.match_method,
+        "match_confidence": item.match_confidence,
     }
 
 

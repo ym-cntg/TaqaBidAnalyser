@@ -7,7 +7,8 @@ RUN npm ci
 
 COPY frontend/ ./
 
-# Not set — defaults to "" (relative URLs), nginx proxies /api/* to backend
+# Empty = relative URLs, nginx proxies /api/* to backend
+ENV NEXT_PUBLIC_API_URL=""
 
 RUN npm run build
 

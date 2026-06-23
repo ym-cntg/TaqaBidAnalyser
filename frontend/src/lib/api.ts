@@ -58,6 +58,8 @@ export interface ComparisonItem {
   unit: string | null;
   qty: number | null;
   bidder_prices: Record<string, { cif_total: number | null; erection_total: number | null; total: number | null }>;
+  match_method: "exact" | "normalized" | "fuzzy" | "llm" | "unmatched";
+  match_confidence: number;
 }
 
 export interface LotComparison {

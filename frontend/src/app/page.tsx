@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
+import { ChevronRight, ChevronDown } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -39,11 +40,48 @@ const MATCH_STYLES: Record<string, { label: string; dot: string }> = {
   unmatched: { label: "Unmatched", dot: "bg-red-500" },
 };
 
+interface ItemGroup {
+  key: string;
+  headerItem: ComparisonItem | null;
+  children: ComparisonItem[];
+}
+
+// BOQ item numbers nest (1 -> 1.1 -> 1.1.1). Group by the top-level segment
+// so long categories can be collapsed to a rolled-up row by default.
+function groupByTopLevel(items: ComparisonItem[]): ItemGroup[] {
+  const groups = new Map<string, ItemGroup>();
+  for (const item of items) {
+    const key = item.item_no.split(".")[0];
+    if (!groups.has(key)) {
+      groups.set(key, { key, headerItem: null, children: [] });
+    }
+    const group = groups.get(key)!;
+    if (item.item_no === key) {
+      group.headerItem = item;
+    } else {
+      group.children.push(item);
+    }
+  }
+  return Array.from(groups.values());
+}
+
+// Roll up a group's per-bidder totals by summing its children (the header
+// row itself is a category label, not usually priced on its own).
+function rollupTotal(group: ItemGroup, bidder: string): number | null {
+  const source = group.children.length > 0 ? group.children : group.headerItem ? [group.headerItem] : [];
+  const values = source
+    .map((item) => item.bidder_prices[bidder]?.total)
+    .filter((v): v is number => v != null);
+  return values.length > 0 ? values.reduce((a, b) => a + b, 0) : null;
+}
+
 export default function ComparePage() {
   const [comparison, setComparison] = useState<ComparisonResult | null>(null);
   const [selectedLot, setSelectedLot] = useState<number>(1);
   const [loading, setLoading] = useState(true);
   const [searchTerm, setSearchTerm] = useState("");
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
+  const [highlightUnmatched, setHighlightUnmatched] = useState(false);
 
   useEffect(() => {
     getComparison()
@@ -57,12 +95,67 @@ export default function ComparePage() {
   const currentLot = comparison?.lots.find((l) => l.lot_number === selectedLot);
   const bidders = currentLot ? Object.keys(currentLot.bidder_totals) : [];
 
-  const filteredItems = currentLot?.items.filter(
-    (item) =>
-      !searchTerm ||
-      item.item_no.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      item.description.toLowerCase().includes(searchTerm.toLowerCase())
-  );
+  const isSearching = searchTerm.trim().length > 0;
+  const matchesSearch = (item: ComparisonItem) =>
+    item.item_no.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    item.description.toLowerCase().includes(searchTerm.toLowerCase());
+
+  const groups = currentLot ? groupByTopLevel(currentLot.items) : [];
+
+  function toggleGroup(key: string) {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+
+  function renderItemRow(item: ComparisonItem, indented: boolean) {
+    const totals = bidders.map((b) => item.bidder_prices[b]?.total ?? null);
+    const isHighlighted = highlightUnmatched && item.match_method === "unmatched";
+    return (
+      <tr
+        key={item.item_no}
+        className={`border-t transition-colors ${
+          isHighlighted
+            ? "border-red-500/30 bg-red-500/[0.08] hover:bg-red-500/[0.12]"
+            : "border-border/60 odd:bg-muted/[0.15] hover:bg-primary/[0.04]"
+        }`}
+      >
+        <td
+          className={`px-3 py-2 font-mono text-xs sticky left-0 ${
+            isHighlighted ? "bg-[oklch(0.97_0.02_25)] dark:bg-[oklch(0.28_0.05_25)]" : "bg-card"
+          }`}
+        >
+          <span className={`flex items-center gap-1.5 ${indented ? "pl-4" : ""}`}>
+            <span className="relative group">
+              <span
+                className={`inline-block w-2 h-2 rounded-full flex-shrink-0 cursor-help ${MATCH_STYLES[item.match_method]?.dot ?? ""}`}
+              />
+              <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 rounded text-[10px] font-sans whitespace-nowrap bg-foreground text-background opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                {MATCH_STYLES[item.match_method]?.label ?? item.match_method} ({Math.round(item.match_confidence * 100)}%)
+              </span>
+            </span>
+            {item.item_no}
+          </span>
+        </td>
+        <td className="px-3 py-2 text-muted-foreground max-w-[300px]">
+          <span className="line-clamp-1">{item.description}</span>
+        </td>
+        <td className="px-3 py-2 text-center text-xs">{item.unit}</td>
+        <td className="px-3 py-2 text-right font-mono text-xs">{item.qty}</td>
+        {bidders.map((b, i) => (
+          <td
+            key={b}
+            className={`px-3 py-2 text-right font-mono text-xs ${getPriceColor(totals[i], totals)}`}
+          >
+            {formatNum(totals[i])}
+          </td>
+        ))}
+      </tr>
+    );
+  }
 
   return (
     <div className="p-8 space-y-6">
@@ -153,6 +246,25 @@ export default function ComparePage() {
             {Object.entries(MATCH_STYLES).map(([key, style]) => {
               const count = currentLot.items.filter((i) => i.match_method === key).length;
               if (count === 0) return null;
+
+              if (key === "unmatched") {
+                return (
+                  <button
+                    key={key}
+                    onClick={() => setHighlightUnmatched((v) => !v)}
+                    className={`flex items-center gap-1 rounded-full px-2 py-1 transition-colors ${
+                      highlightUnmatched
+                        ? "bg-red-500/15 text-red-700 dark:text-red-400 ring-1 ring-red-500/40"
+                        : "hover:bg-muted"
+                    }`}
+                    title={highlightUnmatched ? "Click to stop highlighting" : "Click to highlight unmatched items"}
+                  >
+                    <span className={`inline-block w-2 h-2 rounded-full ${style.dot}`} />
+                    {style.label} ({count})
+                  </button>
+                );
+              }
+
               return (
                 <span key={key} className="flex items-center gap-1">
                   <span className={`inline-block w-2 h-2 rounded-full ${style.dot}`} />
@@ -170,7 +282,7 @@ export default function ComparePage() {
           Loading comparison...
         </div>
       ) : (
-        filteredItems && (
+        currentLot && (
           <div className="rounded-xl border border-border/60 shadow-sm overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -199,52 +311,70 @@ export default function ComparePage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {filteredItems.map((item: ComparisonItem, idx: number) => {
-                    const totals = bidders.map(
-                      (b) => item.bidder_prices[b]?.total ?? null
-                    );
-                    return (
+                  {groups.flatMap((group): ReactNode[] => {
+                    // A group with no dotted children is just a single line
+                    // item — render it flat, no dropdown needed.
+                    if (group.children.length === 0) {
+                      if (group.headerItem && (!isSearching || matchesSearch(group.headerItem))) {
+                        return [renderItemRow(group.headerItem, false)];
+                      }
+                      return [];
+                    }
+
+                    const visibleChildren = isSearching
+                      ? group.children.filter(matchesSearch)
+                      : group.children;
+                    const headerMatches = isSearching && group.headerItem && matchesSearch(group.headerItem);
+                    if (isSearching && visibleChildren.length === 0 && !headerMatches) {
+                      return [];
+                    }
+                    const hasUnmatchedChild = group.children.some((c) => c.match_method === "unmatched");
+                    const isExpanded = isSearching
+                      ? true
+                      : expandedGroups.has(group.key) || (highlightUnmatched && hasUnmatchedChild);
+                    const rollupTotals = bidders.map((b) => rollupTotal(group, b));
+
+                    const headerRow = (
                       <tr
-                        key={idx}
-                        className="border-t border-border/60 odd:bg-muted/[0.15] hover:bg-primary/[0.04] transition-colors"
+                        key={`group-${group.key}`}
+                        onClick={() => toggleGroup(group.key)}
+                        className="border-t border-border/60 bg-primary/[0.04] hover:bg-primary/[0.08] cursor-pointer transition-colors font-medium"
                       >
-                        <td className="px-3 py-2 font-mono text-xs sticky left-0 bg-card">
-                          <span className="flex items-center gap-1.5">
-                            <span className="relative group">
-                              <span
-                                className={`inline-block w-2 h-2 rounded-full flex-shrink-0 cursor-help ${MATCH_STYLES[item.match_method]?.dot ?? ""}`}
-                              />
-                              <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 rounded text-[10px] font-sans whitespace-nowrap bg-foreground text-background opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
-                                {MATCH_STYLES[item.match_method]?.label ?? item.match_method} ({Math.round(item.match_confidence * 100)}%)
-                              </span>
-                            </span>
-                            {item.item_no}
+                        <td className="px-3 py-2 font-mono text-xs sticky left-0 bg-[oklch(0.97_0.01_224)] dark:bg-[oklch(0.24_0.03_224)]">
+                          <span className="flex items-center gap-1">
+                            {isExpanded ? (
+                              <ChevronDown className="w-3.5 h-3.5 text-primary shrink-0" />
+                            ) : (
+                              <ChevronRight className="w-3.5 h-3.5 text-primary shrink-0" />
+                            )}
+                            {group.key}
                           </span>
                         </td>
-                        <td className="px-3 py-2 text-muted-foreground max-w-[300px]">
+                        <td className="px-3 py-2 max-w-[300px]">
                           <span className="line-clamp-1">
-                            {item.description}
+                            {group.headerItem?.description || `Item ${group.key}`}
                           </span>
                         </td>
-                        <td className="px-3 py-2 text-center text-xs">
-                          {item.unit}
+                        <td className="px-3 py-2 text-center text-xs text-muted-foreground">
+                          -
                         </td>
-                        <td className="px-3 py-2 text-right font-mono text-xs">
-                          {item.qty}
+                        <td className="px-3 py-2 text-right font-mono text-xs text-muted-foreground">
+                          -
                         </td>
-                        {bidders.map((b) => {
-                          const val = item.bidder_prices[b]?.total;
-                          return (
-                            <td
-                              key={b}
-                              className={`px-3 py-2 text-right font-mono text-xs ${getPriceColor(val ?? null, totals)}`}
-                            >
-                              {formatNum(val)}
-                            </td>
-                          );
-                        })}
+                        {bidders.map((b, i) => (
+                          <td
+                            key={b}
+                            className={`px-3 py-2 text-right font-mono text-xs ${getPriceColor(rollupTotals[i], rollupTotals)}`}
+                          >
+                            {formatNum(rollupTotals[i])}
+                          </td>
+                        ))}
                       </tr>
                     );
+
+                    return isExpanded
+                      ? [headerRow, ...visibleChildren.map((item) => renderItemRow(item, true))]
+                      : [headerRow];
                   })}
                 </tbody>
               </table>

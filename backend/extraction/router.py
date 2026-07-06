@@ -127,16 +127,18 @@ def extract_pdf(pdf_path: Path) -> list[BOQLot]:
 
 
 def parse_bidder_folder_pdf(bidder_path: Path, bidder_name: str) -> list[BOQExtraction]:
-    """Parse all rounds for a bidder, preferring PDF extraction over Excel.
+    """Parse the original-round submission for a bidder, preferring PDF over Excel.
 
-    For each round:
+    This branch focuses on original bidding only — negotiation rounds
+    (round1/round2/round3) are intentionally not scanned.
+
     1. If PDFs exist → extract from PDFs (PyMuPDF → Azure fallback)
     2. If no PDFs or extraction failed → fall back to Excel
     """
     extractions = []
 
     round_dirs = sorted(
-        [d for d in bidder_path.iterdir() if d.is_dir()],
+        [d for d in bidder_path.iterdir() if d.is_dir() and d.name == "original"],
         key=lambda d: d.name,
     )
 

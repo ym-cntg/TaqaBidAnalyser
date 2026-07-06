@@ -351,12 +351,15 @@ def parse_summary_file(filepath: str | Path) -> dict:
 
 
 def parse_bidder_folder(bidder_path: str | Path, bidder_name: str) -> list[BOQExtraction]:
-    """Parse all rounds for a bidder, returning a list of BOQExtraction per round."""
+    """Parse the original-round submission for a bidder (Excel fallback path).
+
+    Original-bidding skeleton: negotiation rounds are intentionally not scanned.
+    """
     bidder_path = Path(bidder_path)
     extractions = []
 
     round_dirs = sorted(
-        [d for d in bidder_path.iterdir() if d.is_dir()],
+        [d for d in bidder_path.iterdir() if d.is_dir() and d.name == "original"],
         key=lambda d: d.name,
     )
 

@@ -1,288 +1,256 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
-  Users,
-  FileSpreadsheet,
-  TrendingDown,
-  AlertTriangle,
-} from "lucide-react";
-import {
-  getBidders,
-  getRounds,
-  compareRound,
-  extractBidder,
-  type Bidder,
+  getComparison,
   type ComparisonResult,
-  type BOQExtraction,
+  type ComparisonItem,
 } from "@/lib/api";
-import { PriceChart } from "@/components/price-chart";
 
-function formatAED(val: number | null | undefined): string {
-  if (val == null) return "N/A";
-  if (val >= 1_000_000) return `AED ${(val / 1_000_000).toFixed(1)}M`;
-  if (val >= 1_000) return `AED ${(val / 1_000).toFixed(0)}K`;
-  return `AED ${val.toFixed(0)}`;
+function formatNum(val: number | null | undefined): string {
+  if (val == null) return "-";
+  return new Intl.NumberFormat("en-AE", {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 0,
+  }).format(val);
 }
 
-export default function Dashboard() {
-  const [bidders, setBidders] = useState<Bidder[]>([]);
-  const [rounds, setRounds] = useState<string[]>([]);
+function getPriceColor(
+  val: number | null,
+  allVals: (number | null)[]
+): string {
+  if (val == null) return "";
+  const nums = allVals.filter((v): v is number => v != null);
+  if (nums.length < 2) return "";
+  const min = Math.min(...nums);
+  const max = Math.max(...nums);
+  if (val === min) return "text-green-600 font-semibold";
+  if (val === max) return "text-red-500";
+  return "";
+}
+
+const MATCH_STYLES: Record<string, { label: string; dot: string }> = {
+  exact: { label: "Exact", dot: "bg-green-500" },
+  normalized: { label: "Normalized", dot: "bg-blue-500" },
+  fuzzy: { label: "Fuzzy", dot: "bg-amber-500" },
+  llm: { label: "AI Match", dot: "bg-purple-500" },
+  unmatched: { label: "Unmatched", dot: "bg-red-500" },
+};
+
+export default function ComparePage() {
   const [comparison, setComparison] = useState<ComparisonResult | null>(null);
-  const [allExtractions, setAllExtractions] = useState<
-    Record<string, BOQExtraction[]>
-  >({});
+  const [selectedLot, setSelectedLot] = useState<number>(1);
   const [loading, setLoading] = useState(true);
+  const [searchTerm, setSearchTerm] = useState("");
 
   useEffect(() => {
-    async function load() {
-      try {
-        const [b, r] = await Promise.all([getBidders(), getRounds()]);
-        setBidders(b);
-        setRounds(r);
-
-        if (r.length > 0) {
-          const comp = await compareRound(r[0]);
-          setComparison(comp);
-        }
-
-        const extractions: Record<string, BOQExtraction[]> = {};
-        for (const bidder of b) {
-          extractions[bidder.name] = await extractBidder(bidder.name);
-        }
-        setAllExtractions(extractions);
-      } catch (err) {
-        console.error("Failed to load dashboard data:", err);
-      } finally {
-        setLoading(false);
-      }
-    }
-    load();
+    getComparison()
+      .then((c) => {
+        setComparison(c);
+        if (c.lots.length > 0) setSelectedLot(c.lots[0].lot_number);
+      })
+      .finally(() => setLoading(false));
   }, []);
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-screen">
-        <div className="animate-pulse text-muted-foreground">
-          Loading bid data...
-        </div>
-      </div>
-    );
-  }
+  const currentLot = comparison?.lots.find((l) => l.lot_number === selectedLot);
+  const bidders = currentLot ? Object.keys(currentLot.bidder_totals) : [];
 
-  const totalItems = comparison
-    ? comparison.lots.reduce((sum, lot) => sum + lot.item_count, 0)
-    : 0;
+  const filteredItems = currentLot?.items.filter(
+    (item) =>
+      !searchTerm ||
+      item.item_no.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      item.description.toLowerCase().includes(searchTerm.toLowerCase())
+  );
 
   return (
-    <div className="p-8 space-y-8">
-      <div className="flex items-center justify-between rounded-2xl border border-border/60 bg-gradient-to-r from-primary/10 via-card to-card px-6 py-5 shadow-sm">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-wider text-primary">
-            Tender D-111808
-          </p>
-          <h1 className="text-2xl font-bold tracking-tight mt-0.5">
-            Bid Analysis Dashboard
-          </h1>
-          <p className="text-muted-foreground mt-1 text-sm">
-            Construction Works for Replacement of SHBPRY, SMHPRY and DRPRY
-            Substations — ADDC Eastern Region
-          </p>
-        </div>
+    <div className="p-8 space-y-6">
+      <div>
+        <h1 className="text-2xl font-bold tracking-tight">
+          Original Bid Comparison
+        </h1>
+        <p className="text-muted-foreground mt-1">
+          Side-by-side line item comparison across bidders' original submissions
+        </p>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Bidders
-            </CardTitle>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-              <Users className="h-4 w-4 text-primary" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{bidders.length}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {bidders.map((b) => b.name).join(", ")}
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Negotiation Rounds
-            </CardTitle>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[oklch(0.7_0.15_165)]/15">
-              <TrendingDown className="h-4 w-4 text-[oklch(0.55_0.14_165)]" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{rounds.length}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              {rounds.join(", ")}
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              BOQ Line Items
-            </CardTitle>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/10">
-              <FileSpreadsheet className="h-4 w-4 text-violet-600" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">{totalItems}</div>
-            <p className="text-xs text-muted-foreground mt-1">
-              Across {comparison?.lots.length || 0} lots
-            </p>
-          </CardContent>
-        </Card>
-
-        <Card>
-          <CardHeader className="flex flex-row items-center justify-between pb-2">
-            <CardTitle className="text-sm font-medium text-muted-foreground">
-              Flags Detected
-            </CardTitle>
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10">
-              <AlertTriangle className="h-4 w-4 text-amber-600" />
-            </div>
-          </CardHeader>
-          <CardContent>
-            <div className="text-2xl font-bold">
-              {comparison?.flag_summary
-                ? comparison.flag_summary.critical +
-                  comparison.flag_summary.warning
-                : 0}
-            </div>
-            <div className="flex gap-2 mt-1">
-              {comparison?.flag_summary.critical ? (
-                <Badge variant="destructive" className="text-xs">
-                  {comparison.flag_summary.critical} critical
-                </Badge>
-              ) : null}
-              {comparison?.flag_summary.warning ? (
-                <Badge variant="secondary" className="text-xs">
-                  {comparison.flag_summary.warning} warnings
-                </Badge>
-              ) : null}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
-
-      {/* Price Chart */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-lg">
-            Total Contract Price by Round
-          </CardTitle>
-        </CardHeader>
-        <CardContent>
-          <PriceChart extractions={allExtractions} />
-        </CardContent>
-      </Card>
-
-      {/* Lot Summary + Grand Totals */}
+      {/* Lot tabs */}
       {comparison && (
-        <>
-          <div>
-            <h2 className="text-lg font-semibold mb-4">
-              Lot Summary — {comparison.round_name}
-            </h2>
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-              {comparison.lots.map((lot) => (
-                <Card key={lot.lot_number}>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-sm font-medium">
-                      {lot.lot_name}
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    {Object.entries(lot.bidder_totals).map(
-                      ([bidder, totals]) => (
-                        <div
-                          key={bidder}
-                          className="flex items-center justify-between"
-                        >
-                          <span className="text-sm text-muted-foreground">
-                            {bidder}
-                          </span>
-                          <span className="text-sm font-mono font-medium">
-                            {formatAED(totals.total)}
-                          </span>
-                        </div>
-                      )
-                    )}
-                    <div className="pt-2 border-t border-border">
-                      <p className="text-xs text-muted-foreground">
-                        {lot.item_count} line items compared
+        <div className="inline-flex gap-1 rounded-lg bg-muted p-1">
+          {comparison.lots.map((lot) => (
+            <button
+              key={lot.lot_number}
+              onClick={() => setSelectedLot(lot.lot_number)}
+              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
+                selectedLot === lot.lot_number
+                  ? "bg-card text-primary shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Lot {lot.lot_number}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Lot totals */}
+      {currentLot && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {Object.entries(currentLot.bidder_totals).map(([bidder, totals]) => {
+            const allTotals = Object.values(currentLot.bidder_totals)
+              .map((t) => t.total)
+              .filter((t): t is number => t != null);
+            const isLowest =
+              totals.total != null && totals.total === Math.min(...allTotals);
+
+            return (
+              <Card
+                key={bidder}
+                className={
+                  isLowest
+                    ? "border-emerald-500/40 bg-emerald-500/[0.06] shadow-sm shadow-emerald-500/10"
+                    : ""
+                }
+              >
+                <CardContent className="pt-4">
+                  <div className="flex justify-between items-center">
+                    <div>
+                      <p className="text-sm text-muted-foreground">{bidder}</p>
+                      <p className="text-xl font-bold font-mono mt-1">
+                        AED {formatNum(totals.total)}
                       </p>
                     </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    <div className="text-right text-xs text-muted-foreground space-y-1">
+                      <p>CIF: {formatNum(totals.cif)}</p>
+                      <p>Erection: {formatNum(totals.erection)}</p>
+                    </div>
+                    {isLowest && (
+                      <Badge className="bg-emerald-600 text-white">
+                        Lowest
+                      </Badge>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Search + Match Legend */}
+      <div className="flex flex-wrap items-center gap-4">
+        <input
+          type="text"
+          placeholder="Search items..."
+          value={searchTerm}
+          onChange={(e) => setSearchTerm(e.target.value)}
+          className="w-full md:w-80 rounded-lg border border-input bg-background px-4 py-2 text-sm shadow-sm transition-colors focus:outline-none focus:ring-3 focus:ring-ring/50 focus:border-ring"
+        />
+        {currentLot && (
+          <div className="flex items-center gap-3 text-xs text-muted-foreground">
+            <span className="font-medium">Match quality:</span>
+            {Object.entries(MATCH_STYLES).map(([key, style]) => {
+              const count = currentLot.items.filter((i) => i.match_method === key).length;
+              if (count === 0) return null;
+              return (
+                <span key={key} className="flex items-center gap-1">
+                  <span className={`inline-block w-2 h-2 rounded-full ${style.dot}`} />
+                  {style.label} ({count})
+                </span>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Comparison Table */}
+      {loading ? (
+        <div className="text-center py-12 text-muted-foreground animate-pulse">
+          Loading comparison...
+        </div>
+      ) : (
+        filteredItems && (
+          <div className="rounded-xl border border-border/60 shadow-sm overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-muted/60 border-b border-border/60">
+                    <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground w-20 sticky left-0 bg-muted/60">
+                      Item
+                    </th>
+                    <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground min-w-[200px]">
+                      Description
+                    </th>
+                    <th className="px-3 py-3 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground w-14">
+                      Unit
+                    </th>
+                    <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground w-14">
+                      Qty
+                    </th>
+                    {bidders.map((b) => (
+                      <th
+                        key={b}
+                        className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground w-32"
+                      >
+                        {b}
+                      </th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredItems.map((item: ComparisonItem, idx: number) => {
+                    const totals = bidders.map(
+                      (b) => item.bidder_prices[b]?.total ?? null
+                    );
+                    return (
+                      <tr
+                        key={idx}
+                        className="border-t border-border/60 odd:bg-muted/[0.15] hover:bg-primary/[0.04] transition-colors"
+                      >
+                        <td className="px-3 py-2 font-mono text-xs sticky left-0 bg-card">
+                          <span className="flex items-center gap-1.5">
+                            <span className="relative group">
+                              <span
+                                className={`inline-block w-2 h-2 rounded-full flex-shrink-0 cursor-help ${MATCH_STYLES[item.match_method]?.dot ?? ""}`}
+                              />
+                              <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1.5 px-2 py-1 rounded text-[10px] font-sans whitespace-nowrap bg-foreground text-background opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-50">
+                                {MATCH_STYLES[item.match_method]?.label ?? item.match_method} ({Math.round(item.match_confidence * 100)}%)
+                              </span>
+                            </span>
+                            {item.item_no}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-muted-foreground max-w-[300px]">
+                          <span className="line-clamp-1">
+                            {item.description}
+                          </span>
+                        </td>
+                        <td className="px-3 py-2 text-center text-xs">
+                          {item.unit}
+                        </td>
+                        <td className="px-3 py-2 text-right font-mono text-xs">
+                          {item.qty}
+                        </td>
+                        {bidders.map((b) => {
+                          const val = item.bidder_prices[b]?.total;
+                          return (
+                            <td
+                              key={b}
+                              className={`px-3 py-2 text-right font-mono text-xs ${getPriceColor(val ?? null, totals)}`}
+                            >
+                              {formatNum(val)}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-lg">
-                Grand Total — {comparison.round_name}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                {Object.entries(comparison.bidder_grand_totals).map(
-                  ([bidder, total]) => {
-                    const allTotals = Object.values(
-                      comparison.bidder_grand_totals
-                    ).filter((t): t is number => t != null);
-                    const minTotal = Math.min(...allTotals);
-                    const isLowest = total === minTotal;
-
-                    return (
-                      <div
-                        key={bidder}
-                        className={`rounded-xl border p-6 transition-shadow ${
-                          isLowest
-                            ? "border-emerald-500/40 bg-emerald-500/[0.06] shadow-sm shadow-emerald-500/10"
-                            : "border-border/60"
-                        }`}
-                      >
-                        <div className="flex items-center justify-between mb-2">
-                          <h3 className="font-semibold">{bidder}</h3>
-                          {isLowest && (
-                            <Badge className="bg-emerald-600 text-white text-xs">
-                              Lowest
-                            </Badge>
-                          )}
-                        </div>
-                        <p className="text-3xl font-bold font-mono">
-                          {formatAED(total)}
-                        </p>
-                        {total && minTotal && !isLowest && (
-                          <p className="text-sm text-muted-foreground mt-1">
-                            +{formatAED(total - minTotal)} (
-                            {(((total - minTotal) / minTotal) * 100).toFixed(1)}
-                            % higher)
-                          </p>
-                        )}
-                      </div>
-                    );
-                  }
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </>
+        )
       )}
     </div>
   );

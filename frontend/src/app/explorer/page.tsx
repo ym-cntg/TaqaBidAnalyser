@@ -36,8 +36,7 @@ function formatAED(val: number | null | undefined): string {
 export default function ExplorerPage() {
   const [bidders, setBidders] = useState<Bidder[]>([]);
   const [selectedBidder, setSelectedBidder] = useState("");
-  const [extractions, setExtractions] = useState<BOQExtraction[]>([]);
-  const [selectedRound, setSelectedRound] = useState("");
+  const [currentExtraction, setCurrentExtraction] = useState<BOQExtraction | null>(null);
   const [selectedLot, setSelectedLot] = useState(0);
   const [selectedSheet, setSelectedSheet] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -53,20 +52,14 @@ export default function ExplorerPage() {
     if (!selectedBidder) return;
     setLoading(true);
     extractBidder(selectedBidder)
-      .then((exts) => {
-        setExtractions(exts);
-        if (exts.length > 0) {
-          setSelectedRound(exts[0].round_name);
-          setSelectedLot(0);
-          setSelectedSheet(0);
-        }
+      .then((ext) => {
+        setCurrentExtraction(ext);
+        setSelectedLot(0);
+        setSelectedSheet(0);
       })
       .finally(() => setLoading(false));
   }, [selectedBidder]);
 
-  const currentExtraction = extractions.find(
-    (e) => e.round_name === selectedRound
-  );
   const currentLot = currentExtraction?.lots[selectedLot];
   const currentSheet = currentLot?.sheets[selectedSheet];
 
@@ -75,7 +68,7 @@ export default function ExplorerPage() {
       <div>
         <h1 className="text-2xl font-bold tracking-tight">BOQ Explorer</h1>
         <p className="text-muted-foreground mt-1">
-          Deep dive into individual bidder BOQ data
+          Deep dive into an individual bidder's original-round BOQ data
         </p>
       </div>
 
@@ -93,27 +86,6 @@ export default function ExplorerPage() {
             ))}
           </SelectContent>
         </Select>
-
-        <Select
-          value={selectedRound}
-          onValueChange={(v) => {
-            if (!v) return;
-            setSelectedRound(v);
-            setSelectedLot(0);
-            setSelectedSheet(0);
-          }}
-        >
-          <SelectTrigger className="w-36">
-            <SelectValue placeholder="Round" />
-          </SelectTrigger>
-          <SelectContent>
-            {extractions.map((e) => (
-              <SelectItem key={e.round_name} value={e.round_name}>
-                {e.round_name.charAt(0).toUpperCase() + e.round_name.slice(1)}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
       </div>
 
       {loading ? (
@@ -127,7 +99,7 @@ export default function ExplorerPage() {
             <CardContent className="pt-4 flex items-center justify-between">
               <div>
                 <p className="text-sm text-muted-foreground">
-                  {selectedBidder} — {selectedRound}
+                  {selectedBidder} — original submission
                 </p>
                 <p className="text-2xl font-bold font-mono">
                   {formatAED(currentExtraction.total_contract_price)}

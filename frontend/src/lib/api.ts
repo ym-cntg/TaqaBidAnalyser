@@ -10,7 +10,6 @@ async function fetchAPI<T>(path: string): Promise<T> {
 
 export interface Bidder {
   name: string;
-  rounds: string[];
 }
 
 export interface BOQItem {
@@ -89,56 +88,14 @@ export interface ComparisonResult {
   flag_summary: { critical: number; warning: number; info: number };
 }
 
-export interface UploadResult {
-  upload_id: string;
-  filename: string;
-  lot: BOQLot;
-  summary: {
-    lot_name: string;
-    total_items: number;
-    total_cif: number | null;
-    total_erection: number | null;
-    total_price: number | null;
-    sheets: number;
-  };
-}
-
 export async function getBidders(): Promise<Bidder[]> {
   return fetchAPI("/api/sample/bidders");
 }
 
-export async function getRounds(): Promise<string[]> {
-  return fetchAPI("/api/sample/rounds");
-}
-
-export async function extractBidder(bidder: string): Promise<BOQExtraction[]> {
+export async function extractBidder(bidder: string): Promise<BOQExtraction> {
   return fetchAPI(`/api/sample/extract/${encodeURIComponent(bidder)}`);
 }
 
-export async function compareRound(round: string): Promise<ComparisonResult> {
-  return fetchAPI(`/api/sample/compare/${encodeURIComponent(round)}`);
-}
-
-export async function uploadFile(
-  file: File,
-  bidder: string,
-  roundName: string
-): Promise<UploadResult> {
-  const formData = new FormData();
-  formData.append("file", file);
-  formData.append("bidder", bidder);
-  formData.append("round_name", roundName);
-
-  const res = await fetch(`${API_BASE}/api/upload`, {
-    method: "POST",
-    body: formData,
-    signal: AbortSignal.timeout(300_000), // 5 min for large scanned PDFs
-  });
-
-  if (!res.ok) {
-    const error = await res.json().catch(() => ({ detail: res.statusText }));
-    throw new Error(error.detail || "Upload failed");
-  }
-
-  return res.json();
+export async function getComparison(): Promise<ComparisonResult> {
+  return fetchAPI("/api/sample/compare");
 }

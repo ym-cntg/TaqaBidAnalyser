@@ -3,19 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
-  LayoutDashboard,
-  Upload,
   GitCompareArrows,
-  AlertTriangle,
   FileSpreadsheet,
   Zap,
 } from "lucide-react";
 
 const navItems = [
-  { href: "/", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/upload", label: "Upload & Extract", icon: Upload },
-  { href: "/compare", label: "Compare Bidders", icon: GitCompareArrows },
-  { href: "/flags", label: "Flags & Insights", icon: AlertTriangle },
+  { href: "/", label: "Bid Comparison", icon: GitCompareArrows },
   { href: "/explorer", label: "BOQ Explorer", icon: FileSpreadsheet },
 ];
 

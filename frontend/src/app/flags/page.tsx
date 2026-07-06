@@ -25,21 +25,21 @@ import { getRounds, compareRound, type Flag, type ComparisonResult } from "@/lib
 const severityConfig = {
   critical: {
     icon: ShieldAlert,
-    color: "text-red-600",
-    bg: "bg-red-50 border-red-200",
-    badge: "bg-red-100 text-red-700",
+    color: "text-red-600 dark:text-red-400",
+    bg: "bg-red-500/[0.06] border-red-500/25",
+    badge: "bg-red-500/15 text-red-700 dark:text-red-400",
   },
   warning: {
     icon: AlertTriangle,
-    color: "text-amber-600",
-    bg: "bg-amber-50 border-amber-200",
-    badge: "bg-amber-100 text-amber-700",
+    color: "text-amber-600 dark:text-amber-400",
+    bg: "bg-amber-500/[0.07] border-amber-500/25",
+    badge: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
   },
   info: {
     icon: Info,
-    color: "text-blue-600",
-    bg: "bg-blue-50 border-blue-200",
-    badge: "bg-blue-100 text-blue-700",
+    color: "text-blue-600 dark:text-blue-400",
+    bg: "bg-blue-500/[0.06] border-blue-500/25",
+    badge: "bg-blue-500/15 text-blue-700 dark:text-blue-400",
   },
 };
 
@@ -110,7 +110,9 @@ export default function FlagsPage() {
             return (
               <Card key={sev} className={config.bg}>
                 <CardContent className="pt-4 flex items-center gap-4">
-                  <config.icon className={`h-8 w-8 ${config.color}`} />
+                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-background/60">
+                    <config.icon className={`h-6 w-6 ${config.color}`} />
+                  </div>
                   <div>
                     <p className="text-2xl font-bold">{count}</p>
                     <p className="text-sm text-muted-foreground capitalize">
@@ -199,7 +201,7 @@ export default function FlagsPage() {
             return (
               <div
                 key={idx}
-                className={`rounded-lg border p-4 ${config.bg} flex items-start gap-4`}
+                className={`rounded-xl border p-4 shadow-sm transition-shadow hover:shadow-md ${config.bg} flex items-start gap-4`}
               >
                 <CategoryIcon
                   className={`h-5 w-5 mt-0.5 ${config.color} shrink-0`}

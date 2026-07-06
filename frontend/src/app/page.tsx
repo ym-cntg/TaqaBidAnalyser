@@ -78,14 +78,19 @@ export default function Dashboard() {
 
   return (
     <div className="p-8 space-y-8">
-      <div>
-        <h1 className="text-2xl font-bold tracking-tight">
-          Bid Analysis Dashboard
-        </h1>
-        <p className="text-muted-foreground mt-1">
-          Tender D-111808 — Construction Works for Replacement of SHBPRY, SMHPRY
-          and DRPRY Substations
-        </p>
+      <div className="flex items-center justify-between rounded-2xl border border-border/60 bg-gradient-to-r from-primary/10 via-card to-card px-6 py-5 shadow-sm">
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider text-primary">
+            Tender D-111808
+          </p>
+          <h1 className="text-2xl font-bold tracking-tight mt-0.5">
+            Bid Analysis Dashboard
+          </h1>
+          <p className="text-muted-foreground mt-1 text-sm">
+            Construction Works for Replacement of SHBPRY, SMHPRY and DRPRY
+            Substations — ADDC Eastern Region
+          </p>
+        </div>
       </div>
 
       {/* KPI Cards */}
@@ -95,7 +100,9 @@ export default function Dashboard() {
             <CardTitle className="text-sm font-medium text-muted-foreground">
               Bidders
             </CardTitle>
-            <Users className="h-4 w-4 text-muted-foreground" />
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
+              <Users className="h-4 w-4 text-primary" />
+            </div>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{bidders.length}</div>
@@ -110,7 +117,9 @@ export default function Dashboard() {
             <CardTitle className="text-sm font-medium text-muted-foreground">
               Negotiation Rounds
             </CardTitle>
-            <TrendingDown className="h-4 w-4 text-muted-foreground" />
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-[oklch(0.7_0.15_165)]/15">
+              <TrendingDown className="h-4 w-4 text-[oklch(0.55_0.14_165)]" />
+            </div>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{rounds.length}</div>
@@ -125,7 +134,9 @@ export default function Dashboard() {
             <CardTitle className="text-sm font-medium text-muted-foreground">
               BOQ Line Items
             </CardTitle>
-            <FileSpreadsheet className="h-4 w-4 text-muted-foreground" />
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-violet-500/10">
+              <FileSpreadsheet className="h-4 w-4 text-violet-600" />
+            </div>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{totalItems}</div>
@@ -140,7 +151,9 @@ export default function Dashboard() {
             <CardTitle className="text-sm font-medium text-muted-foreground">
               Flags Detected
             </CardTitle>
-            <AlertTriangle className="h-4 w-4 text-muted-foreground" />
+            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-amber-500/10">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+            </div>
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">
@@ -238,16 +251,16 @@ export default function Dashboard() {
                     return (
                       <div
                         key={bidder}
-                        className={`rounded-xl border p-6 ${
+                        className={`rounded-xl border p-6 transition-shadow ${
                           isLowest
-                            ? "border-green-500/50 bg-green-500/5"
-                            : "border-border"
+                            ? "border-emerald-500/40 bg-emerald-500/[0.06] shadow-sm shadow-emerald-500/10"
+                            : "border-border/60"
                         }`}
                       >
                         <div className="flex items-center justify-between mb-2">
                           <h3 className="font-semibold">{bidder}</h3>
                           {isLowest && (
-                            <Badge className="bg-green-600 text-white text-xs">
+                            <Badge className="bg-emerald-600 text-white text-xs">
                               Lowest
                             </Badge>
                           )}

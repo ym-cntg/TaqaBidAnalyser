@@ -114,15 +114,15 @@ export default function ComparePage() {
 
       {/* Lot tabs */}
       {comparison && (
-        <div className="flex gap-2">
+        <div className="inline-flex gap-1 rounded-lg bg-muted p-1">
           {comparison.lots.map((lot) => (
             <button
               key={lot.lot_number}
               onClick={() => setSelectedLot(lot.lot_number)}
-              className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+              className={`px-4 py-1.5 rounded-md text-sm font-medium transition-all ${
                 selectedLot === lot.lot_number
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-muted-foreground hover:bg-muted/80"
+                  ? "bg-card text-primary shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
               }`}
             >
               Lot {lot.lot_number}
@@ -145,7 +145,9 @@ export default function ComparePage() {
               <Card
                 key={bidder}
                 className={
-                  isLowest ? "border-green-500/50 bg-green-500/5" : ""
+                  isLowest
+                    ? "border-emerald-500/40 bg-emerald-500/[0.06] shadow-sm shadow-emerald-500/10"
+                    : ""
                 }
               >
                 <CardContent className="pt-4">
@@ -161,7 +163,9 @@ export default function ComparePage() {
                       <p>Erection: {formatNum(totals.erection)}</p>
                     </div>
                     {isLowest && (
-                      <Badge className="bg-green-600 text-white">Lowest</Badge>
+                      <Badge className="bg-emerald-600 text-white">
+                        Lowest
+                      </Badge>
                     )}
                   </div>
                 </CardContent>
@@ -178,7 +182,7 @@ export default function ComparePage() {
           placeholder="Search items..."
           value={searchTerm}
           onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full md:w-80 rounded-lg border border-border bg-background px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/50"
+          className="w-full md:w-80 rounded-lg border border-input bg-background px-4 py-2 text-sm shadow-sm transition-colors focus:outline-none focus:ring-3 focus:ring-ring/50 focus:border-ring"
         />
         {currentLot && (
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
@@ -204,27 +208,27 @@ export default function ComparePage() {
         </div>
       ) : (
         filteredItems && (
-          <div className="rounded-lg border border-border overflow-hidden">
+          <div className="rounded-xl border border-border/60 shadow-sm overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="bg-muted/50">
-                    <th className="px-3 py-3 text-left font-medium text-muted-foreground w-20 sticky left-0 bg-muted/50">
+                  <tr className="bg-muted/60 border-b border-border/60">
+                    <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground w-20 sticky left-0 bg-muted/60">
                       Item
                     </th>
-                    <th className="px-3 py-3 text-left font-medium text-muted-foreground min-w-[200px]">
+                    <th className="px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground min-w-[200px]">
                       Description
                     </th>
-                    <th className="px-3 py-3 text-center font-medium text-muted-foreground w-14">
+                    <th className="px-3 py-3 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground w-14">
                       Unit
                     </th>
-                    <th className="px-3 py-3 text-right font-medium text-muted-foreground w-14">
+                    <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground w-14">
                       Qty
                     </th>
                     {bidders.map((b) => (
                       <th
                         key={b}
-                        className="px-3 py-3 text-right font-medium text-muted-foreground w-32"
+                        className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground w-32"
                       >
                         {b}
                       </th>
@@ -239,9 +243,9 @@ export default function ComparePage() {
                     return (
                       <tr
                         key={idx}
-                        className="border-t border-border hover:bg-muted/20"
+                        className="border-t border-border/60 odd:bg-muted/[0.15] hover:bg-primary/[0.04] transition-colors"
                       >
-                        <td className="px-3 py-2 font-mono text-xs sticky left-0 bg-background">
+                        <td className="px-3 py-2 font-mono text-xs sticky left-0 bg-card">
                           <span className="flex items-center gap-1.5">
                             <span className="relative group">
                               <span

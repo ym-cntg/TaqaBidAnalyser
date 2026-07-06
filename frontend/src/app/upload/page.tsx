@@ -76,10 +76,10 @@ export default function UploadPage() {
         }}
         onDragLeave={() => setDragging(false)}
         onDrop={handleDrop}
-        className={`relative rounded-xl border-2 border-dashed p-16 text-center transition-colors ${
+        className={`relative rounded-2xl border-2 border-dashed p-16 text-center transition-all ${
           dragging
-            ? "border-primary bg-primary/5"
-            : "border-border hover:border-muted-foreground/50"
+            ? "border-primary bg-primary/5 shadow-md shadow-primary/10"
+            : "border-border bg-card/50 hover:border-primary/40 hover:bg-primary/[0.02]"
         }`}
       >
         <input
@@ -92,8 +92,8 @@ export default function UploadPage() {
           {uploading ? (
             <div className="animate-spin h-12 w-12 rounded-full border-4 border-primary border-t-transparent" />
           ) : (
-            <div className="h-16 w-16 rounded-2xl bg-muted flex items-center justify-center">
-              <FileUp className="h-8 w-8 text-muted-foreground" />
+            <div className="h-16 w-16 rounded-2xl bg-primary/10 flex items-center justify-center">
+              <FileUp className="h-8 w-8 text-primary" />
             </div>
           )}
           <div>
@@ -116,8 +116,8 @@ export default function UploadPage() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-destructive/50 bg-destructive/5 p-4 flex items-center gap-3">
-          <X className="h-5 w-5 text-destructive" />
+        <div className="rounded-xl border border-destructive/30 bg-destructive/[0.06] p-4 flex items-center gap-3 shadow-sm">
+          <X className="h-5 w-5 text-destructive shrink-0" />
           <p className="text-sm text-destructive">{error}</p>
         </div>
       )}
@@ -126,8 +126,8 @@ export default function UploadPage() {
       {result && (
         <div className="space-y-6">
           {/* Summary */}
-          <div className="flex items-center gap-3">
-            <CheckCircle2 className="h-6 w-6 text-green-600" />
+          <div className="flex items-center gap-3 rounded-xl border border-emerald-500/30 bg-emerald-500/[0.06] px-4 py-3 shadow-sm">
+            <CheckCircle2 className="h-6 w-6 text-emerald-600 shrink-0" />
             <div>
               <p className="font-semibold">Extraction Complete</p>
               <p className="text-sm text-muted-foreground">
@@ -201,33 +201,33 @@ export default function UploadPage() {
 
           {/* Items Table */}
           {result.lot.sheets[activeSheet] && (
-            <div className="rounded-lg border border-border overflow-hidden">
+            <div className="rounded-xl border border-border/60 shadow-sm overflow-hidden">
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
                   <thead>
-                    <tr className="bg-muted/50">
-                      <th className="px-4 py-3 text-left font-medium text-muted-foreground w-20">
+                    <tr className="bg-muted/60 border-b border-border/60">
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground w-20">
                         Item
                       </th>
-                      <th className="px-4 py-3 text-left font-medium text-muted-foreground">
+                      <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
                         Description
                       </th>
-                      <th className="px-4 py-3 text-center font-medium text-muted-foreground w-16">
+                      <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide text-muted-foreground w-16">
                         Unit
                       </th>
-                      <th className="px-4 py-3 text-right font-medium text-muted-foreground w-16">
+                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground w-16">
                         Qty
                       </th>
-                      <th className="px-4 py-3 text-right font-medium text-muted-foreground w-28">
+                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground w-28">
                         CIF Rate
                       </th>
-                      <th className="px-4 py-3 text-right font-medium text-muted-foreground w-28">
+                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground w-28">
                         CIF Total
                       </th>
-                      <th className="px-4 py-3 text-right font-medium text-muted-foreground w-28">
+                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground w-28">
                         Erection
                       </th>
-                      <th className="px-4 py-3 text-right font-medium text-muted-foreground w-28">
+                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground w-28">
                         Total (A+B)
                       </th>
                     </tr>
@@ -237,10 +237,10 @@ export default function UploadPage() {
                       (item: BOQItem, idx: number) => (
                         <tr
                           key={idx}
-                          className={`border-t border-border ${
+                          className={`border-t border-border/60 transition-colors ${
                             item.is_section_header
-                              ? "bg-muted/30 font-semibold"
-                              : "hover:bg-muted/20"
+                              ? "bg-primary/[0.05] font-semibold"
+                              : "odd:bg-muted/[0.15] hover:bg-primary/[0.04]"
                           }`}
                         >
                           <td className="px-4 py-2 font-mono text-xs">

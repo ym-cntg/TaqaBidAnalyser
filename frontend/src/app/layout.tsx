@@ -22,7 +22,9 @@ export default function RootLayout({
     <html lang="en" className={`${inter.variable} h-full antialiased`}>
       <body className="min-h-full flex bg-background text-foreground">
         <Sidebar />
-        <main className="flex-1 ml-64 overflow-auto">{children}</main>
+        <main className="flex-1 ml-64 min-h-screen overflow-auto bg-app-gradient">
+          {children}
+        </main>
       </body>
     </html>
   );

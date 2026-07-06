@@ -383,6 +383,16 @@ def parse_bidder_folder(bidder_path: str | Path, bidder_name: str) -> list[BOQEx
 
         if lots:
             lots.sort(key=lambda l: l.lot_number)
+
+            # Some bidders don't submit a separate summary-of-all-lots file
+            # (e.g. only 3 per-lot files, no combined summary) — fall back to
+            # summing each lot's own total_price rather than leaving the
+            # contract total blank when we already have the real numbers.
+            if total_contract_price is None:
+                lot_totals = [l.total_price for l in lots if l.total_price is not None]
+                if lot_totals:
+                    total_contract_price = sum(lot_totals)
+
             extractions.append(
                 BOQExtraction(
                     tender_no="D-111808",

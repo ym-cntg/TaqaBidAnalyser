@@ -1,6 +1,7 @@
 """Extract structured BOQ data from PDF files using PyMuPDF."""
 
 import logging
+import re
 from pathlib import Path
 
 import fitz
@@ -50,7 +51,21 @@ def _parse_table_row(row: list[str], col_count: int) -> BOQItem | None:
         return None
     if "technical specifications" in desc.lower():
         return None
-    if "total price" in desc.lower() or "sub total" in desc.lower():
+
+    # Skip subtotal/recap rows — these can appear in either the description
+    # ("Total Price...") or the item_no field ("Item-1 Sub Total...", a
+    # pattern the Excel parser already guards against but the PDF table
+    # extractor previously missed, letting recap rows leak in as fake items).
+    desc_lower = desc.lower()
+    item_lower = item_no.lower().strip()
+    if any(kw in desc_lower for kw in (
+        "total price", "sub total", "subtotal", "total lot",
+        "total contract", "grand total", "u.a.e. dirhams",
+    )):
+        return None
+    if any(kw in item_lower for kw in ("sub total", "grand total", "total")):
+        return None
+    if re.match(r"^item\s*-?\s*\d+$", item_lower):
         return None
 
     if col_count >= 9:

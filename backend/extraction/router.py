@@ -149,12 +149,12 @@ def parse_bidder_folder_pdf(bidder_path: Path, bidder_name: str) -> list[BOQExtr
 
         lots: list[BOQLot] = []
         total_contract_price = None
+        boq_pdfs: list[Path] = []
 
         # Try PDF extraction first
         if pdf_dir.exists():
             pdf_files = sorted(pdf_dir.glob("*.pdf"))
             # Filter out cover letters, summaries, and non-BOQ files
-            boq_pdfs = []
             for f in pdf_files:
                 lower = f.name.lower()
                 # Skip obvious non-BOQ files
@@ -173,6 +173,23 @@ def parse_bidder_folder_pdf(bidder_path: Path, bidder_name: str) -> list[BOQExtr
                     continue
                 boq_pdfs.append(f)
 
+            # A "summary of lots" document has a fundamentally different table
+            # shape (one row per BOQ category, lot-comparison columns side by
+            # side) than a detail BOQ (one row per line item, unit/qty/rate
+            # columns). The per-item parsers below assume the detail layout
+            # and will misattribute columns if fed a summary table. If every
+            # available PDF for this round is summary-shaped, there's no
+            # genuine detailed source to extract at all — don't try.
+            detail_pdfs = [f for f in boq_pdfs if "summary" not in f.name.lower()]
+            if boq_pdfs and not detail_pdfs:
+                logger.warning(
+                    "%s/%s only has a lot-summary document, no detail BOQ — "
+                    "skipping (would misattribute lot-comparison columns as "
+                    "item unit/qty/rate)",
+                    bidder_name, round_name,
+                )
+                boq_pdfs = []
+
             for pdf_file in boq_pdfs:
                 pdf_lots = extract_pdf(pdf_file)
                 for lot in pdf_lots:
@@ -189,9 +206,30 @@ def parse_bidder_folder_pdf(bidder_path: Path, bidder_name: str) -> list[BOQExtr
             len(lots) == 1
             and sum(len(s.items) for lot in lots for s in lot.sheets) > 500
         )
-        needs_fallback = not lots or has_only_unknown_lots or has_oversized_lot
+        # No PDF filename identified a specific lot — any multi-lot split we
+        # got came entirely from the item-number-reset heuristic
+        # (_detect_lot_boundaries), which relies on OCR/table extraction
+        # cleanly reproducing bare top-level item numbers ("1", "2", "3"...).
+        # That heuristic can misattribute items across lots when it doesn't
+        # (see: AL Geemi's single combined commercial-submission PDF), so
+        # prefer known-reliable per-lot Excel data when it exists instead.
+        used_boundary_guessing = bool(boq_pdfs) and all(
+            _detect_lot_from_filename(f.name)[1] == 0 for f in boq_pdfs
+        )
+        guessed_multi_lot_split = used_boundary_guessing and len(lots) > 1
+
+        needs_fallback = (
+            not lots or has_only_unknown_lots or has_oversized_lot
+            or guessed_multi_lot_split
+        )
         if needs_fallback and excel_dir.exists() and list(excel_dir.glob("*.xlsx")):
-            if has_only_unknown_lots or has_oversized_lot:
+            if guessed_multi_lot_split:
+                logger.info(
+                    "PDF %s/%s only had a combined multi-lot document — "
+                    "distrusting the guessed lot split, falling back to Excel",
+                    bidder_name, round_name,
+                )
+            elif has_only_unknown_lots or has_oversized_lot:
                 logger.info("PDF produced unsplit multi-lot data for %s/%s — falling back to Excel", bidder_name, round_name)
             else:
                 logger.info("Falling back to Excel for %s/%s", bidder_name, round_name)

@@ -2,6 +2,7 @@
 
 import logging
 import os
+import re
 from pathlib import Path
 
 import fitz
@@ -87,9 +88,17 @@ def _parse_azure_table_row(cells: list[str], col_count: int) -> BOQItem | None:
         return None
     if "technical specifications" in lower_desc:
         return None
-    if "total price" in lower_desc or "sub total" in lower_desc:
+
+    # Skip subtotal/recap rows — can appear in either the description
+    # ("Total Price...") or the item_no field ("Item-1 Sub Total...").
+    if any(kw in lower_desc for kw in (
+        "total price", "sub total", "subtotal", "total lot",
+        "total contract", "grand total", "u.a.e. dirhams",
+    )):
         return None
-    if "total contract" in lower_desc:
+    if any(kw in lower_item for kw in ("sub total", "grand total", "total")):
+        return None
+    if re.match(r"^item\s*-?\s*\d+$", lower_item):
         return None
 
     if col_count >= 9:

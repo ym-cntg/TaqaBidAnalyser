@@ -35,7 +35,14 @@ def _get_bidder_extractions(bidder_path: Path, bidder_name: str):
 
 @router.get("/sample/bidders")
 async def list_sample_bidders():
-    """List available sample bidders from the data directory."""
+    """List bidders with genuinely extractable original-round data.
+
+    Filesystem presence isn't enough — a bidder can have an original/
+    folder that only contains a lot-summary document (no real per-item
+    BOQ), which extracts to nothing. Only list bidders whose original
+    round actually yields usable data, so the frontend never offers a
+    selection that dead-ends.
+    """
     power_dir = DATA_DIR / "power"
     if not power_dir.exists():
         return []
@@ -48,7 +55,9 @@ async def list_sample_bidders():
         has_original = original_dir.is_dir() and (
             (original_dir / "excel").exists() or (original_dir / "pdf").exists()
         )
-        if has_original:
+        if not has_original:
+            continue
+        if _get_bidder_extractions(d, d.name):
             bidders.append({"name": d.name})
     return bidders
 

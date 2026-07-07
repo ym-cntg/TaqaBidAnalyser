@@ -18,6 +18,7 @@ def serialize_item(item: BOQItem) -> dict:
         "is_section_header": item.is_section_header,
         "raw_cif": item.raw_cif,
         "raw_erection": item.raw_erection,
+        "is_corrected": item.is_corrected,
     }
 
 

@@ -21,6 +21,7 @@ class BOQItem:
     is_section_header: bool = False
     raw_cif: str | None = None  # original cell value (for "Included", "N/A" etc.)
     raw_erection: str | None = None
+    is_corrected: bool = False  # True if a user overrode the OCR/extracted value
 
 
 @dataclass(frozen=True)

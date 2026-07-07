@@ -8,6 +8,19 @@ async function fetchAPI<T>(path: string): Promise<T> {
   return res.json();
 }
 
+async function postAPI<T>(path: string, body: unknown): Promise<T> {
+  const res = await fetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.detail ?? `API error: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export interface Bidder {
   name: string;
 }
@@ -25,7 +38,18 @@ export interface BOQItem {
   is_section_header: boolean;
   raw_cif: string | null;
   raw_erection: string | null;
+  is_corrected: boolean;
 }
+
+export type EditableItemField =
+  | "description"
+  | "unit"
+  | "qty"
+  | "cif_unit_rate"
+  | "cif_total"
+  | "erection_unit_rate"
+  | "erection_total"
+  | "total";
 
 export interface BOQSheet {
   name: string;
@@ -56,7 +80,10 @@ export interface ComparisonItem {
   description: string;
   unit: string | null;
   qty: number | null;
-  bidder_prices: Record<string, { cif_total: number | null; erection_total: number | null; total: number | null }>;
+  bidder_prices: Record<
+    string,
+    { cif_total: number | null; erection_total: number | null; total: number | null; is_corrected: boolean }
+  >;
   match_method: "exact" | "normalized" | "fuzzy" | "llm" | "unmatched";
   match_confidence: number;
 }
@@ -98,4 +125,32 @@ export async function extractBidder(bidder: string): Promise<BOQExtraction> {
 
 export async function getComparison(): Promise<ComparisonResult> {
   return fetchAPI("/api/sample/compare");
+}
+
+export async function correctItem(
+  bidder: string,
+  lotNumber: number,
+  sheetName: string,
+  itemNo: string,
+  fields: Partial<Record<EditableItemField, string | number | null>>
+): Promise<BOQExtraction> {
+  return postAPI(`/api/sample/extract/${encodeURIComponent(bidder)}/correct`, {
+    lot_number: lotNumber,
+    sheet_name: sheetName,
+    item_no: itemNo,
+    fields,
+  });
+}
+
+export async function revertItem(
+  bidder: string,
+  lotNumber: number,
+  sheetName: string,
+  itemNo: string
+): Promise<BOQExtraction> {
+  return postAPI(`/api/sample/extract/${encodeURIComponent(bidder)}/revert`, {
+    lot_number: lotNumber,
+    sheet_name: sheetName,
+    item_no: itemNo,
+  });
 }

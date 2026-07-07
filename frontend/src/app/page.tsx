@@ -150,7 +150,14 @@ export default function ComparePage() {
             key={b}
             className={`px-3 py-2 text-right font-mono text-xs ${getPriceColor(totals[i], totals)}`}
           >
-            {formatNum(totals[i])}
+            <span
+              title={item.bidder_prices[b]?.is_corrected ? "Manually corrected value" : undefined}
+            >
+              {formatNum(totals[i])}
+              {item.bidder_prices[b]?.is_corrected && (
+                <span className="text-amber-500 ml-0.5">*</span>
+              )}
+            </span>
           </td>
         ))}
       </tr>

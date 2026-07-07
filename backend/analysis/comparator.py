@@ -65,6 +65,7 @@ def _build_item_map(lot: BOQLot) -> dict[str, dict]:
                     "erection_unit_rate": item.erection_unit_rate,
                     "raw_cif": item.raw_cif,
                     "raw_erection": item.raw_erection,
+                    "is_corrected": item.is_corrected,
                 }
     return item_map
 
@@ -333,12 +334,14 @@ def _match_bidders_for_lot(
                     "cif_total": d["cif_total"],
                     "erection_total": d["erection_total"],
                     "total": d["total"],
+                    "is_corrected": d.get("is_corrected", False),
                 }
             else:
                 prices[bidder_name] = {
                     "cif_total": None,
                     "erection_total": None,
                     "total": None,
+                    "is_corrected": False,
                 }
 
         # Skip section headers: items where no bidder has any pricing

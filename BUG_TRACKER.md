@@ -22,8 +22,8 @@ Two kinds of entries:
 | [BUG-003](#bug-003) | Missing contract-total fallback when no summary file exists | High | Fixed |
 | [BUG-004](#bug-004) | Lot-summary document misparsed as detail BOQ (ELMEC) | High | Fixed (excluded) |
 | [BUG-005](#bug-005) | Inflated effective column count from stray formula artifacts | Medium | Fixed |
-| [DATA-001](#data-001) | OCR digit misread, 100x inflation (DANWAY) | Critical | Flagged (not code-fixable) |
-| [DATA-002](#data-002) | Bidder's own cross-lot pricing inconsistency (Site) | Medium | Flagged (not code-fixable) |
+| [DATA-001](#data-001) | OCR digit misread, 100x inflation (DANWAY) | Critical | Flagged — correctable via reviewer edit |
+| [DATA-002](#data-002) | Bidder's own cross-lot pricing inconsistency (Site) | Medium | Flagged — correctable via reviewer edit |
 
 ---
 
@@ -166,10 +166,14 @@ section): **499,500**. Exactly 100x. This is Azure misreading a digit on a
 scanned cell — nothing in our parsing logic to fix, since it's not our code
 that read the number.
 
-**Mitigation implemented**: the new cross-lot consistency check (see
+**Mitigation implemented**: the cross-lot consistency check (see
 "Cross-lot consistency flag" below) catches this automatically going
 forward — this specific value now surfaces as a `critical` flag rather than
-silently feeding into the contract total.
+silently feeding into the contract total. A reviewer can now also fix it
+directly via the manual correction tool (see "Manual correction fail-safe"
+below) — verified end-to-end: correcting item `3.16`'s CIF total to 499,500
+drops Lot 3's `total_cif` from 86.2M to 36.8M (matching Lots 1/2) and makes
+the cross-lot flag for this item disappear on the next comparison.
 
 ---
 
@@ -207,3 +211,34 @@ the *peer-median* ratio for the same item — a bidder swinging in line with
 everyone else isn't flagged; a bidder swinging dramatically more than peers
 is. Final result on the sample data: exactly 2 flags, both confirmed real
 (DATA-001, DATA-002 above).
+
+---
+
+## Manual correction fail-safe (fix for DATA-001, DATA-002)
+
+**Added**: 2026-07-07, `backend/analysis/corrections.py`
+
+Detection (the cross-lot flag above) only surfaces a suspect value — it
+doesn't fix it. This closes the loop: a reviewer looking at the Explorer
+table can override any field on any item directly, and the correction
+feeds every downstream calculation (lot/contract totals, the Compare
+table, flag detection) without re-running extraction.
+
+- Corrections are layered on top of the raw parsed data on every read,
+  never mutate it — reverting a correction always recovers the true
+  original OCR/parsed value, even after multiple edits.
+- Lot/contract totals are adjusted by the *delta* of the correction
+  (`new - old`), not re-summed from scratch, so the fix doesn't silently
+  change how totals are computed for the rest of a bidder's data.
+- Verified against the real DATA-001 bug: correcting DANWAY item `3.16`'s
+  CIF total (49,950,000 → 499,500) drops Lot 3's `total_cif` from 86.2M to
+  36.8M — in line with Lots 1/2 — and removes the cross-lot flag for that
+  item on the next `/api/sample/compare` call. Reverting restores 86.2M
+  exactly, confirming no data is lost.
+- Frontend: Explorer table rows get an edit (pencil) / revert (undo) icon
+  and an amber "Corrected" badge; the Compare table marks corrected cells
+  with a small amber `*` so the correction is visible from either page.
+- **Known scope limit**: in-memory only, lost on server restart — same
+  limitation as the rest of this POC's sample-data model. Should be
+  persisted together with `/api/upload` results (see `SPRINT_PLAN.md`
+  Week 3) if this moves beyond a demo.

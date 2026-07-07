@@ -67,6 +67,13 @@ scope until this is true.
 - [x] Cross-lot consistency flag (emerged from the spot-check above, not
       originally planned) — catches DATA-001/DATA-002 automatically going
       forward. See `PROGRESS.md`, 2026-07-07.
+- [x] Manual correction fail-safe (also emerged from the spot-check —
+      detection alone doesn't fix a bad number, a reviewer needs to) — any
+      BOQ item field can be overridden in the Explorer table, and the
+      correction flows into totals, flags, and Compare automatically.
+      Verified against the real DANWAY OCR bug. In-memory only for now;
+      needs persistence before this is more than a demo (see Week 3). See
+      `PROGRESS.md` and `BUG_TRACKER.md`, 2026-07-07.
 - [ ] Decide & implement a policy for bidders with data gaps like ELMEC's
       (exclude vs. flag-and-include vs. request re-extraction) — right now
       it's silently excluded, which is correct for this sample but needs a
@@ -123,9 +130,11 @@ Mohammed's manual process."
 - [ ] **Cache extraction failures** — right now, files that fail extraction
       retry a real (slow, costly) Azure OCR call on every request; cache
       the failure too, with a manual bust mechanism
-- [ ] **Persist `/api/upload` results** — currently in-memory only, lost on
-      restart; decide whether upload is a real workflow feature (re-add the
-      page) or descope it for this delivery
+- [ ] **Persist `/api/upload` results and item corrections** — both are
+      currently in-memory only, lost on restart; decide whether upload is a
+      real workflow feature (re-add the page) or descope it for this
+      delivery, and give corrections a real store (even a JSON file per
+      tender would beat losing a reviewer's fixes on every restart)
 - [ ] **Description-change detection** — Mohammed explicitly checks that
       bidders didn't alter BOQ wording (`power_transcript.md`); nothing in
       either pipeline currently diffs descriptions across bidders/rounds.
@@ -174,11 +183,12 @@ business-case owners.
 | Must | Round-over-round anomaly flags | Week 2 |
 | Must | Report export (Excel/HTML download) | Week 3 |
 | Must | UAT against Mohammed's manual sheet | Week 4 |
+| Must | Manual correction fail-safe for OCR/extraction errors | Week 1 |
 | Should | Dashboard page rebuild | Week 2 |
 | Should | Flags & Insights page rebuild | Week 2 |
 | Should | Cache extraction failures | Week 3 |
 | Should | Description-change detection | Week 3 |
-| Could | Persist upload results / re-add Upload page | Week 3 |
+| Could | Persist upload results / item corrections / re-add Upload page | Week 3 |
 | Could | Azure deployment | Week 4 |
 | Won't (this cycle) | Water/other tender-type support | — |
 | Won't (this cycle) | Multi-tender support (currently hardcoded to D-111808) | — |

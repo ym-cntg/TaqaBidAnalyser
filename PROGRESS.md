@@ -10,6 +10,49 @@ narrates the story, that file is the reference table.
 
 ---
 
+## 2026-07-07 — Manual correction fail-safe for OCR/extraction errors
+
+DATA-001/DATA-002 below can be *detected* automatically (cross-lot flag),
+but detection alone still leaves a bad number sitting in the totals and
+the Compare table until someone re-extracts. This adds the other half:
+a reviewer can fix the value directly, and the fix propagates everywhere
+without re-running extraction.
+
+- **Feature — inline item correction** (`backend/analysis/corrections.py`,
+  new). Any field on any BOQ item (description, unit, qty, CIF/erection
+  rate or total) can be overridden. Corrections are layered on top of the
+  raw parsed data on every read — `_get_bidder_extractions()` in
+  `routes.py` now applies them fresh each call, so **reverting always
+  restores the true original OCR/parsed value**, not a previous edit.
+  Three new endpoints: `POST /sample/extract/{bidder}/correct`,
+  `POST /sample/extract/{bidder}/revert`,
+  `GET /sample/extract/{bidder}/corrections`.
+- **Rollup is delta-based, not re-derived.** Lot/contract totals are
+  nudged by exactly the size of the correction
+  (`new_value - old_value`), rather than re-summed from scratch from all
+  items. This matters because lot totals sometimes come from a bidder's
+  own printed Excel summary-sheet cell rather than a sum of item rows —
+  re-deriving from scratch would silently change the methodology for
+  every bidder, not just the one corrected item.
+- **Verified against the real DANWAY OCR bug (DATA-001)**: corrected
+  item `3.16`'s CIF total from 49,950,000 to 499,500 via the API —
+  Lot 3's `total_cif` dropped by exactly the delta (86.2M → 36.8M,
+  now in line with Lots 1/2), and the cross-lot flag for this item
+  disappeared from `/api/sample/compare` on the next call. DATA-002
+  (Site) is left uncorrected as a demonstration that the flag persists
+  until a reviewer acts on it.
+- **Frontend** (`explorer/page.tsx`): each row gets an edit (pencil) icon;
+  editing swaps the row into inline inputs with Save/Cancel. Corrected
+  rows get an amber "Corrected" badge and a revert (undo) icon. The
+  Compare page (`page.tsx`) marks corrected cells with a small amber `*`
+  and tooltip, so a reviewer looking at Compare — not just Explorer —
+  can tell a number isn't the raw OCR output.
+- **Known scope limit**: corrections are in-memory only (lost on server
+  restart), same as the rest of this POC's sample-data model — no
+  persistence layer exists yet (tracked as a pre-existing Week 3 item in
+  `SPRINT_PLAN.md` for `/api/upload` results; corrections now share that
+  same limitation and should be persisted together).
+
 ## 2026-07-07 — `original-bid-analysis` branch: cross-lot consistency flag
 
 Implements the mitigation proposed at the end of the Week 1 spot-check

@@ -98,7 +98,15 @@ export default function ComparePage() {
   }, []);
 
   const currentLot = comparison?.lots.find((l) => l.lot_number === selectedLot);
-  const bidders = currentLot ? Object.keys(currentLot.bidder_totals) : [];
+  // Data-gap bidders (no real BOQ yet — see BOQ Explorer) are pushed to the
+  // end rather than interleaved with real bidders, so a reviewer can see at
+  // a glance which columns aren't ready to be judged against yet.
+  const bidders = currentLot
+    ? Object.keys(currentLot.bidder_totals).sort(
+        (a, b) => Number(dataGapBidders.has(a)) - Number(dataGapBidders.has(b))
+      )
+    : [];
+  const firstGapIndex = bidders.findIndex((b) => dataGapBidders.has(b));
 
   const isSearching = searchTerm.trim().length > 0;
   const matchesSearch = (item: ComparisonItem) =>
@@ -118,6 +126,10 @@ export default function ComparePage() {
 
   function renderItemRow(item: ComparisonItem, indented: boolean) {
     const totals = bidders.map((b) => item.bidder_prices[b]?.total ?? null);
+    // Data-gap bidders don't compete for cheapest/priciest until their BOQ
+    // is actually filled in — exclude them from the comparison pool, but
+    // still show whatever partial value they have (just uncolored).
+    const eligibleTotals = bidders.map((b, i) => (dataGapBidders.has(b) ? null : totals[i]));
     const isHighlighted = highlightUnmatched && item.match_method === "unmatched";
     return (
       <tr
@@ -150,21 +162,26 @@ export default function ComparePage() {
         </td>
         <td className="px-3 py-2 text-center text-xs">{item.unit}</td>
         <td className="px-3 py-2 text-right font-mono text-xs">{item.qty}</td>
-        {bidders.map((b, i) => (
-          <td
-            key={b}
-            className={`px-3 py-2 text-right font-mono text-xs ${getPriceColor(totals[i], totals)}`}
-          >
-            <span
-              title={item.bidder_prices[b]?.is_corrected ? "Manually corrected value" : undefined}
+        {bidders.map((b, i) => {
+          const isGap = dataGapBidders.has(b);
+          return (
+            <td
+              key={b}
+              className={`px-3 py-2 text-right font-mono text-xs ${
+                i === firstGapIndex ? "border-l-2 border-dashed border-amber-400/50" : ""
+              } ${isGap ? "text-muted-foreground/50 italic" : getPriceColor(totals[i], eligibleTotals)}`}
             >
-              {formatNum(totals[i])}
-              {item.bidder_prices[b]?.is_corrected && (
-                <span className="text-amber-500 ml-0.5">*</span>
-              )}
-            </span>
-          </td>
-        ))}
+              <span
+                title={item.bidder_prices[b]?.is_corrected ? "Manually corrected value" : undefined}
+              >
+                {formatNum(totals[i])}
+                {item.bidder_prices[b]?.is_corrected && (
+                  <span className="text-amber-500 ml-0.5">*</span>
+                )}
+              </span>
+            </td>
+          );
+        })}
       </tr>
     );
   }
@@ -202,7 +219,8 @@ export default function ComparePage() {
       {/* Lot totals */}
       {currentLot && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {Object.entries(currentLot.bidder_totals).map(([bidder, totals]) => {
+          {bidders.map((bidder) => {
+            const totals = currentLot.bidder_totals[bidder];
             const isDataGap = dataGapBidders.has(bidder);
             // A data-gap bidder's total may be partially (or not at all) manually
             // entered — it's never a fair basis for "Lowest" until the reviewer
@@ -257,18 +275,23 @@ export default function ComparePage() {
         </div>
       )}
 
-      {/* Search + Match Legend */}
-      <div className="flex flex-wrap items-center gap-4">
-        <input
-          type="text"
-          placeholder="Search items..."
-          value={searchTerm}
-          onChange={(e) => setSearchTerm(e.target.value)}
-          className="w-full md:w-80 rounded-lg border border-input bg-background px-4 py-2 text-sm shadow-sm transition-colors focus:outline-none focus:ring-3 focus:ring-ring/50 focus:border-ring"
-        />
-        {currentLot && (
-          <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <span className="font-medium">Match quality:</span>
+      {/* Search */}
+      <input
+        type="text"
+        placeholder="Search items..."
+        value={searchTerm}
+        onChange={(e) => setSearchTerm(e.target.value)}
+        className="w-full md:w-80 rounded-lg border border-input bg-background px-4 py-2 text-sm shadow-sm transition-colors focus:outline-none focus:ring-3 focus:ring-ring/50 focus:border-ring"
+      />
+
+      {/* Legend — two distinct groups, since both use red/green and were
+          getting visually confused: dot color = how confidently an item
+          was matched across bidders; text color = how a bidder's price
+          for that item compares to peers. */}
+      {currentLot && (
+        <div className="flex flex-wrap items-start gap-x-6 gap-y-2 rounded-lg border border-border/60 bg-muted/20 px-4 py-3 text-xs text-muted-foreground">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-semibold text-foreground">Match quality</span>
             {Object.entries(MATCH_STYLES).map(([key, style]) => {
               const count = currentLot.items.filter((i) => i.match_method === key).length;
               if (count === 0) return null;
@@ -299,8 +322,32 @@ export default function ComparePage() {
               );
             })}
           </div>
-        )}
-      </div>
+
+          <div className="hidden md:block w-px self-stretch bg-border" />
+
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="font-semibold text-foreground">Price per item</span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block w-2 h-2 rounded-full bg-green-600" />
+              Cheapest
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="inline-block w-2 h-2 rounded-full bg-red-500" />
+              Priciest
+            </span>
+            <span className="flex items-center gap-1">
+              <span className="text-amber-500 font-mono font-semibold">*</span>
+              Manually corrected value
+            </span>
+            {dataGapBidders.size > 0 && (
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-2 h-2 rounded-full bg-muted-foreground/40" />
+                Data gap — excluded from cheapest/priciest until entered
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Comparison Table */}
       {loading ? (
@@ -326,12 +373,19 @@ export default function ComparePage() {
                     <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground w-14">
                       Qty
                     </th>
-                    {bidders.map((b) => (
+                    {bidders.map((b, i) => (
                       <th
                         key={b}
-                        className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground w-32"
+                        className={`px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground w-32 ${
+                          i === firstGapIndex ? "border-l-2 border-dashed border-amber-400/50" : ""
+                        }`}
                       >
                         {b}
+                        {dataGapBidders.has(b) && (
+                          <span className="ml-1 text-amber-500" title="Data gap — needs entry">
+                            ⚠
+                          </span>
+                        )}
                       </th>
                     ))}
                   </tr>
@@ -359,6 +413,9 @@ export default function ComparePage() {
                       ? true
                       : expandedGroups.has(group.key) || (highlightUnmatched && hasUnmatchedChild);
                     const rollupTotals = bidders.map((b) => rollupTotal(group, b));
+                    const eligibleRollupTotals = bidders.map((b, i) =>
+                      dataGapBidders.has(b) ? null : rollupTotals[i]
+                    );
 
                     const headerRow = (
                       <tr
@@ -387,14 +444,23 @@ export default function ComparePage() {
                         <td className="px-3 py-2 text-right font-mono text-xs text-muted-foreground">
                           -
                         </td>
-                        {bidders.map((b, i) => (
-                          <td
-                            key={b}
-                            className={`px-3 py-2 text-right font-mono text-xs ${getPriceColor(rollupTotals[i], rollupTotals)}`}
-                          >
-                            {formatNum(rollupTotals[i])}
-                          </td>
-                        ))}
+                        {bidders.map((b, i) => {
+                          const isGap = dataGapBidders.has(b);
+                          return (
+                            <td
+                              key={b}
+                              className={`px-3 py-2 text-right font-mono text-xs ${
+                                i === firstGapIndex ? "border-l-2 border-dashed border-amber-400/50" : ""
+                              } ${
+                                isGap
+                                  ? "text-muted-foreground/50 italic"
+                                  : getPriceColor(rollupTotals[i], eligibleRollupTotals)
+                              }`}
+                            >
+                              {formatNum(rollupTotals[i])}
+                            </td>
+                          );
+                        })}
                       </tr>
                     );
 

@@ -10,6 +10,28 @@ narrates the story, that file is the reference table.
 
 ---
 
+## 2026-07-07 — Compare page: isolate data-gap bidders, clarify the legend
+
+Caught in manual review of the Compare table with a real data-gap bidder
+(ELMEC, partially filled in): its 2 manually-entered items were winning
+"cheapest" (green) purely because most of its ~400 items are still blank,
+and it sat interleaved between real bidders with no visual distinction.
+
+- **Cheapest/priciest coloring now excludes data-gap bidders** from the
+  comparison pool at every level (per-item rows, rolled-up category rows) —
+  not just the bidder-total cards, which were already fixed earlier today.
+  A data-gap bidder's own values still display, just uncolored/muted, until
+  their BOQ is actually complete.
+- **Data-gap bidder columns are sorted to the end** of the table (and the
+  bidder-total card grid), with a dashed amber divider and a ⚠ marker on
+  the header, instead of sitting interleaved with real bidders.
+- **Legend split into two clearly labeled groups** — "Match quality" (dot
+  colors: how confidently an item matched across bidders) and "Price per
+  item" (text colors: cheapest/priciest/corrected/data-gap) — since both
+  previously used green/red and were genuinely confusing side by side.
+
+---
+
 ## 2026-07-07 — Regression check for extraction correctness
 
 Last open item from the Week 1 sprint checklist that didn't already fall

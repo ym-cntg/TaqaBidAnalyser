@@ -78,6 +78,37 @@ def _safe_str(val) -> str | None:
     return str(val).strip() if str(val).strip() else None
 
 
+def _effective_col_count(ws) -> int:
+    """openpyxl's ws.max_column can be inflated by stray content far below
+    the header -- e.g. corrupted #REF! formula artifacts sitting on
+    subtotal rows -- and column count drives which fields (unit/qty/rate/
+    erection/total) get read for every row in the sheet, so an inflated
+    count silently misreads real data as blank (seen on a bidder whose
+    Lot 2 "Items 9" sheet reported max_column=10 while every genuine row
+    only ever populates 6, because a subtotal row's leftover #REF! cells
+    happened to land in columns 8-10).
+
+    The real column layout is defined by the header block itself: the row
+    with "Item" in column 1, plus the two rows below it (sub-headers like
+    "Unit Rate (b)" / "Total (a*b)", and — for the full 9-column layout —
+    "A + B" one row further down under the Total column).
+    """
+    header_row = None
+    for r in range(1, min(15, ws.max_row) + 1):
+        if ws.cell(row=r, column=1).value and str(ws.cell(row=r, column=1).value).strip() == "Item":
+            header_row = r
+            break
+    if header_row is None:
+        return ws.max_column
+
+    max_col = 0
+    for r in range(header_row, header_row + 3):
+        for c in range(1, ws.max_column + 1):
+            if ws.cell(row=r, column=c).value is not None:
+                max_col = max(max_col, c)
+    return max_col
+
+
 def _is_section_header(row_vals: list) -> bool:
     """A section header has an item number and description but no pricing."""
     has_item = row_vals[0] is not None
@@ -312,7 +343,7 @@ def parse_lot_file(filepath: str | Path) -> BOQLot:
                         total_price = price
             continue
 
-        items = _parse_detail_sheet(ws, ws.max_column)
+        items = _parse_detail_sheet(ws, _effective_col_count(ws))
         if items:
             sheets.append(BOQSheet(name=sheet_name, items=tuple(items)))
 

@@ -1,5 +1,6 @@
 """Compare bidders and generate analysis insights."""
 
+import statistics
 from dataclasses import dataclass
 from ..extraction.excel_parser import BOQExtraction, BOQLot
 from .item_matcher import match_items
@@ -19,12 +20,15 @@ class ComparisonItem:
 @dataclass(frozen=True)
 class Flag:
     severity: str  # "critical", "warning", "info"
-    category: str  # "unquoted", "arithmetic", "unbalanced", "outlier", "missing"
+    category: str  # "unquoted", "arithmetic", "unbalanced", "outlier", "missing", "cross_lot"
     bidder: str
     lot: str
     item_no: str
     description: str
     detail: str
+
+
+CROSS_LOT_RATIO_THRESHOLD = 4.0  # flag when >4x or <0.25x a bidder's own median across their lots
 
 
 @dataclass(frozen=True)
@@ -160,6 +164,93 @@ def _detect_flags(
     return flags
 
 
+def _detect_cross_lot_flags(
+    lot_names: dict[int, str],
+    bidder_lot_items: dict[int, dict[str, dict[str, dict]]],
+) -> list[Flag]:
+    """Flag items where a bidder's own price swings across their own lots
+    far more than peer bidders' prices swing for that same item.
+
+    Comparing a bidder's cross-lot ratio in isolation produces false
+    positives: many BOQ items (e.g. cable/excavation work under "Load
+    Diversion Works") legitimately need very different quantities per lot,
+    since each substation has a different physical layout — every bidder's
+    price for those items swings 5x by lot, and that swing is the item's
+    real shape, not an error.
+
+    Instead: normalize each bidder's per-lot value to their own median for
+    that item (their "own ratio"), then compare that ratio to the *median
+    ratio other bidders show for the same item/lot*. If everyone swings
+    ~5x on an item, a bidder swinging 5x is unremarkable (ratio-of-ratios
+    ~1). A bidder swinging 100x on an item everyone else prices consistently
+    is what's actually suspicious (ratio-of-ratios ~100). This is exactly
+    what caught a real OCR error: a bidder's Lot 3 price for one item was
+    100x their own Lot 1/Lot 2 figure, while every other bidder priced that
+    same item consistently across their own lots — see PROGRESS.md,
+    2026-07-07.
+    """
+    flags: list[Flag] = []
+
+    # item_no -> bidder -> {lot_num: cif_total}
+    item_bidder_lot_values: dict[str, dict[str, dict[int, float]]] = {}
+    item_descriptions: dict[str, str] = {}
+    for lot_num, items_by_bidder in bidder_lot_items.items():
+        for bidder_name, items in items_by_bidder.items():
+            for item_no, data in items.items():
+                cif_total = data.get("cif_total")
+                if cif_total is None or cif_total <= 0:
+                    continue
+                item_bidder_lot_values.setdefault(item_no, {}).setdefault(bidder_name, {})[lot_num] = cif_total
+                item_descriptions.setdefault(item_no, data.get("description") or "")
+
+    for item_no, bidder_values in item_bidder_lot_values.items():
+        # Each bidder's own normalized ratio per lot (value / that bidder's own median)
+        norm: dict[str, dict[int, float]] = {}
+        for bidder_name, lot_values in bidder_values.items():
+            if len(lot_values) < 2:
+                continue
+            median = statistics.median(lot_values.values())
+            if median <= 0:
+                continue
+            norm[bidder_name] = {lot_num: v / median for lot_num, v in lot_values.items()}
+
+        if len(norm) < 2:
+            continue  # need peer bidders with multi-lot data to compare against
+
+        lots_present = {lot_num for ratios in norm.values() for lot_num in ratios}
+        for lot_num in lots_present:
+            peer_ratios = [ratios[lot_num] for ratios in norm.values() if lot_num in ratios]
+            if len(peer_ratios) < 2:
+                continue
+            expected = statistics.median(peer_ratios)
+            if expected <= 0:
+                continue
+
+            for bidder_name, ratios in norm.items():
+                if lot_num not in ratios:
+                    continue
+                deviation = ratios[lot_num] / expected
+                if deviation > CROSS_LOT_RATIO_THRESHOLD or deviation < 1 / CROSS_LOT_RATIO_THRESHOLD:
+                    value = bidder_values[bidder_name][lot_num]
+                    own_median = statistics.median(bidder_values[bidder_name].values())
+                    flags.append(Flag(
+                        severity="critical",
+                        category="cross_lot",
+                        bidder=bidder_name,
+                        lot=lot_names.get(lot_num, f"Lot {lot_num}"),
+                        item_no=item_no,
+                        description=item_descriptions.get(item_no, "")[:100],
+                        detail=(
+                            f"CIF total {value:,.0f} is {ratios[lot_num]:.1f}x this "
+                            f"bidder's own median ({own_median:,.0f}) across their lots for "
+                            f"this item, vs. a peer-typical {expected:.1f}x — possible "
+                            f"data-entry or OCR error"
+                        ),
+                    ))
+
+    return flags
+
+
 def _sort_key(item_no: str) -> list[float]:
     """Sort item numbers numerically (e.g., 1.2.3 before 1.10.1)."""
     return [float(p) if p.replace(".", "").isdigit() else 0 for p in item_no.split(".")]
@@ -278,12 +369,14 @@ def compare_round(
     """Compare all bidders for a given round."""
     # Collect item maps per bidder per lot
     bidder_lot_items: dict[int, dict[str, dict[str, dict]]] = {}
+    lot_names: dict[int, str] = {}
 
     for bidder_name, extraction in extractions.items():
         for lot in extraction.lots:
             if lot.lot_number not in bidder_lot_items:
                 bidder_lot_items[lot.lot_number] = {}
             bidder_lot_items[lot.lot_number][bidder_name] = _build_item_map(lot)
+            lot_names[lot.lot_number] = lot.lot_name
 
     lot_comparisons = []
     all_flags = []
@@ -296,11 +389,10 @@ def compare_round(
 
         # Lot-level totals and flags
         bidder_totals = {}
-        lot_name = f"Lot {lot_num}"
+        lot_name = lot_names.get(lot_num, f"Lot {lot_num}")
         for bidder_name, extraction in extractions.items():
             for lot in extraction.lots:
                 if lot.lot_number == lot_num:
-                    lot_name = lot.lot_name
                     bidder_totals[bidder_name] = {
                         "cif": lot.total_cif,
                         "erection": lot.total_erection,
@@ -316,6 +408,11 @@ def compare_round(
             items=tuple(comparison_items),
             bidder_totals=bidder_totals,
         ))
+
+    # Cross-lot consistency needs every bidder's items across all lots at
+    # once (to compare a bidder's swing against peers'), unlike the per-lot
+    # loop above.
+    all_flags.extend(_detect_cross_lot_flags(lot_names, bidder_lot_items))
 
     grand_totals = {}
     for bidder_name, extraction in extractions.items():

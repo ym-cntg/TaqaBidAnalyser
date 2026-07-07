@@ -58,10 +58,15 @@ clean. See `PROGRESS.md` for full detail and verification steps.
 Goal: original-round data is *trustworthy enough to build on*. Don't widen
 scope until this is true.
 
-- [ ] Spot-check remaining bidders (DANWAY, POWER LINES, Ray, Site, Spaceage)
+- [x] Spot-check remaining bidders (DANWAY, POWER LINES, Ray, Site, Spaceage)
       line-by-line against source PDFs/Excel, not just contract totals —
-      today's bugs were only caught by looking at *item-level* detail, not
-      just totals lining up
+      found and fixed one more real bug (BUG-005: inflated effective column
+      count) and confirmed two genuine data-quality issues that aren't code
+      bugs (DATA-001: OCR digit misread; DATA-002: bidder's own cross-lot
+      pricing inconsistency). See `BUG_TRACKER.md`.
+- [x] Cross-lot consistency flag (emerged from the spot-check above, not
+      originally planned) — catches DATA-001/DATA-002 automatically going
+      forward. See `PROGRESS.md`, 2026-07-07.
 - [ ] Decide & implement a policy for bidders with data gaps like ELMEC's
       (exclude vs. flag-and-include vs. request re-extraction) — right now
       it's silently excluded, which is correct for this sample but needs a

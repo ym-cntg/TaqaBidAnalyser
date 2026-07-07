@@ -3,9 +3,92 @@
 Living log of notable changes to this project — feature work, bug fixes, and
 investigations worth remembering. Newest entries at the top. This is separate
 from `TUTORIAL.md` (which explains how the system works end-to-end) — this
-file tracks *what changed and why*, chronologically.
+file tracks *what changed and why*, chronologically. `BUG_TRACKER.md` is the
+companion structured record of every extraction bug and data-quality finding
+(what's broken/fixed vs. what's just real messy source data) — this log
+narrates the story, that file is the reference table.
 
 ---
+
+## 2026-07-07 — `original-bid-analysis` branch: cross-lot consistency flag
+
+Implements the mitigation proposed at the end of the Week 1 spot-check
+below: a bidder's own price for the same item shouldn't swing wildly across
+their own 3 lots, and when it does, it's usually a data error worth
+surfacing rather than silently trusting.
+
+- **Feature — cross-lot consistency flag**
+  (`comparator.py::_detect_cross_lot_flags()`, new `Flag` category
+  `"cross_lot"`, severity `critical`). First attempt compared each bidder's
+  cross-lot ratio against a fixed threshold in isolation — threw 19 flags on
+  the sample data, and checking them individually showed 18 were false
+  positives: items like cable/excavation work under "Load Diversion Works"
+  legitimately swing ~5x by lot because each substation has a different
+  physical layout, and *every* bidder shows that same swing. Refined to
+  compare each bidder's cross-lot ratio against the **peer-median** ratio
+  for that same item instead of a fixed threshold — a bidder swinging in
+  line with everyone else is no longer flagged; only a bidder swinging far
+  more than peers do for that specific item is. Final result: exactly 2
+  flags, both independently confirmed real — see `BUG_TRACKER.md` DATA-001
+  (the DANWAY OCR misread found below) and the newly-discovered **DATA-002**:
+  Site's own Lot 2 Excel file prices item `1.14.3` at AED 202,808 vs.
+  ~1,420 in Lots 1/3 — confirmed directly in the raw source cells, a
+  genuine bidder data-entry inconsistency, not an extraction artifact.
+- Added `BUG_TRACKER.md`: a structured table of every bug/data-quality
+  finding (ID, severity, status, root cause, fix, measured impact),
+  separate from this narrative log.
+
+## 2026-07-07 — `original-bid-analysis` branch: Week 1 spot-check (DANWAY, POWER LINES, Ray, Site, Spaceage)
+
+Per `SPRINT_PLAN.md` Week 1: cross-checked every remaining bidder's extracted
+line items against their raw source files directly (openpyxl reads
+bypassing our parser entirely; PDF page images for the one OCR-only bidder),
+not just contract totals.
+
+- **Fix — inflated effective column count from stray formula artifacts.**
+  `excel_parser.py::parse_lot_file()` used `ws.max_column` to decide a
+  sheet's column layout (6-column spare-parts vs. 9-column full layout).
+  openpyxl's `max_column` can be inflated by content that has nothing to do
+  with the real header — found on Ray's Lot 2 "Items 9" sheet, which
+  reported `max_column=10` (vs. 6 on the otherwise-identical Lot 1/Lot 3
+  sheets) because subtotal rows further down the sheet had leftover
+  `#REF!` corrupted-formula values sitting in columns 8-10. That pushed
+  every real item in the sheet through the wrong column-count branch,
+  silently reading blank cells as the `total` field instead of falling back
+  to `total = cif_total` like the correctly-detected sheets. Replaced with
+  `_effective_col_count()`, which derives column count from the sheet's own
+  header block (the "Item" row plus the two rows below it) instead of
+  trusting `max_column`. Verified against Ray (fixed: 9.1.1-9.1.4 total
+  now correctly shows the CIF value instead of `None`) and re-verified
+  zero regressions on Site, Spaceage, AGPOWER, AL Geemi, POWER LINES.
+  **This bug only affected the per-item `total` display, not lot/contract
+  aggregates** — exactly the kind of thing a totals-only check would miss.
+
+- **Found, not a code bug — genuine OCR misread (DANWAY).** DANWAY's only
+  source file is a 95-page scanned PDF (no digital text layer at all,
+  forcing the full Azure OCR path with no Excel to fall back to). Lot 3's
+  contract total (122.2M) was ~60% higher than Lots 1/2 (73.8M/77.6M),
+  entirely driven by item `3.16` "Substation Lighting and Small Power":
+  CIF total extracted as **49,950,000** vs. **499,500** in Lots 1 and 2 —
+  exactly 100x. Visually confirmed against the actual scanned page (page 80,
+  "Page 16 of 17" of Lot 3): the real value printed on the page is
+  **499,500** — Azure misread it. This is OCR noise on this specific cell,
+  not something our parsing logic got wrong; hardcoding a fix for one
+  bidder's one cell would be inappropriate. Everything else in DANWAY's
+  data checked out (a handful of ~2x cross-lot differences on pilot-wire
+  items are plausible genuine quantity differences between the three
+  physical substations, not extraction errors).
+
+- **Verified clean, no issues found**: Site, Spaceage, POWER LINES, Ray (once
+  the column-count fix landed) — every sampled line item across multiple
+  sheets/lots matched the raw source file exactly.
+
+- **Recommendation arising from this**: a **cross-lot consistency check**
+  (flag when the same bidder's own price for the same item number differs
+  by >Nx across their own lots) would have caught the DANWAY error
+  automatically. This is a different check from the existing cross-*bidder*
+  outlier detection in `comparator.py`. **Implemented same day** — see the
+  entry above.
 
 ## 2026-07-06 — `original-bid-analysis` branch: unmatched-items highlight toggle
 

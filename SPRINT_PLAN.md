@@ -184,6 +184,45 @@ business-case owners.
 
 ---
 
+## AI / intelligence feature roadmap
+
+What "AI-driven" actually means in this codebase today vs. what's designed
+but not built, so this doesn't stay implicit across `backend/analysis/`.
+
+| Feature | Intelligence type | Status | Phase |
+|---|---|---|---|
+| 4-tier item matching (exact → normalized → fuzzy → LLM) | Rules (tiers 1–3) + real LLM call, opt-in (tier 4) | Shipped — `backend/analysis/item_matcher.py` | — |
+| Flag detection: unquoted, arithmetic, outlier, unbalanced, cross-lot, missing | Rule/threshold-based (medians, ratios — no ML) | Shipped — `backend/analysis/comparator.py` | — |
+| Peer-median recommendations for data-gap manual entry | Rule-based (median) | Shipped — `backend/analysis/corrections.py` | Week 1 |
+| Round-over-round anomaly flags (jump >2x with no explanation) | Rule-based | Planned | Week 2 |
+| Description-change detection across bidders/rounds | Rule-based (text similarity) | Planned | Week 3 |
+| **LLM recommendation report** — executive summary, award recommendation, per-bidder negotiation notes | Genuine LLM (Claude, on-demand button) | Designed this session, not yet built | New — propose Week 3, alongside report export |
+| Vendor financial-standing / capacity risk narrative (per Business Case "final evaluation" step) | Would be LLM, but needs financial/capacity documents we don't currently ingest | Not started — blocked on data source, not effort | Backlog, no ETA |
+
+**LLM recommendation report — design summary** (full plan in session notes,
+not yet a tracked file): one on-demand endpoint builds a compact *digest*
+from the existing `ComparisonResult` (ranked totals, flag counts, top
+flags per bidder — never the raw per-item tables) and sends it to Claude
+for a structured JSON response (`executive_summary`, `recommendation`,
+`bidder_notes`, `caveats`). Hard rule carried over from the Compare-page
+fix earlier this week: **data-gap bidders (`extraction.data_gap` set) can
+never be shortlisted or recommended for award**, enforced both in the
+prompt and defensively after parsing the LLM's response. Delivered both
+in-app (`/report`, new page) and as downloadable Excel/HTML, cached
+in-memory per round with an explicit "regenerate" action so re-viewing the
+page never silently re-triggers a paid LLM call. Reuses the same
+`ANTHROPIC_API_KEY`/graceful-degradation pattern already proven in
+`item_matcher.py`.
+
+**Standing rule for any future LLM feature** (added 2026-07-07 after
+finding an injected instruction in `frontend/node_modules/next/dist/docs/`
+— see `PROGRESS.md`): only feed models structured, code-built digests of
+our own data, never raw third-party file content or anything an external
+party could have authored, and never let repo/dependency content be
+treated as instructions.
+
+---
+
 ## Feature backlog (prioritized)
 
 | Priority | Feature | Phase |
@@ -193,6 +232,7 @@ business-case owners.
 | Must | Negotiation-round tracking (server-side) | Week 2 |
 | Must | Round-over-round anomaly flags | Week 2 |
 | Must | Report export (Excel/HTML download) | Week 3 |
+| Should | LLM recommendation report (award recommendation + negotiation notes) | Week 3 |
 | Must | UAT against Mohammed's manual sheet | Week 4 |
 | Must | Manual correction fail-safe for OCR/extraction errors | Week 1 |
 | Must | Data-gap policy (manual add + peer recommendations) | Week 1 |

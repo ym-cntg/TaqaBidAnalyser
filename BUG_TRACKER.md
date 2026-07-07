@@ -99,7 +99,8 @@ available, mirroring logic the PDF-router path already had.
 **Severity**: High — garbled unit/qty values, one bidder's data unusable
 **Component**: `backend/extraction/router.py`, `backend/api/routes.py`
 **Found**: 2026-07-06
-**Status**: Fixed (bidder excluded from comparison), commit `4b249c5`
+**Status**: Fixed — data-gap policy implemented 2026-07-07 (see below);
+originally shipped as "excluded", commit `4b249c5`
 
 **Root cause**: ELMEC's `original/` folder only contains
 `D-111808BOQ-SummaryofLot1,2&3.pdf` — a lot-*comparison* summary (one row
@@ -110,13 +111,15 @@ unit/qty/rate.
 
 **Fix**: Detect when every available PDF for a round is summary-shaped (no
 detail-shaped alternative) and treat it as no extractable data, rather than
-misparsing it. `GET /api/sample/bidders` now only lists bidders whose data
-actually extracts to something.
+misparsing it.
 
-**Impact**: ELMEC dropped from the original-round comparison (7 bidders now,
-down from 8); everyone else unaffected. Note: ELMEC's `round1`/`round2`
-folders *do* have proper detail files — only the original submission lacks
-one in this sample set.
+**Impact**: ELMEC's original-round data stopped being misparsed. Initially
+(2026-07-06) this meant `GET /api/sample/bidders` simply excluded it — 7
+bidders shown, down from 8, with no indication anything was missing.
+**Updated 2026-07-07**: replaced silent exclusion with the data-gap policy
+below — ELMEC is listed again, flagged, and manually fillable. Note:
+ELMEC's `round1`/`round2` folders *do* have proper detail files — only the
+original submission lacks one in this sample set.
 
 ---
 
@@ -242,3 +245,45 @@ table, flag detection) without re-running extraction.
   limitation as the rest of this POC's sample-data model. Should be
   persisted together with `/api/upload` results (see `SPRINT_PLAN.md`
   Week 3) if this moves beyond a demo.
+
+---
+
+## Data-gap policy: manual add with recommendations (fix for BUG-004/ELMEC)
+
+**Added**: 2026-07-07, `backend/api/routes.py::_build_gap_skeleton()`,
+`backend/analysis/comparator.py::compute_peer_recommendations()`
+
+Three policies were considered for a bidder with no extractable BOQ
+(exclude / flag-and-include / request re-extraction). Silent exclusion
+(BUG-004's original fix) made the bidder disappear with no trace — wrong
+for a real tender, where a missing bidder needs to be *dealt with*, not
+hidden. The policy implemented instead: **include the bidder, make the gap
+visible, and let a reviewer manually build the BOQ**, sped up with
+peer-median recommendations.
+
+- A data-gap bidder gets a skeleton extraction: item structure (item_no,
+  description, unit, qty) cloned from another bidder with real data — the
+  ADDC-standard template is identical across bidders — with every pricing
+  field wiped and `is_missing=True`.
+- Manual entry is literally the same code path as an OCR correction (see
+  the fail-safe above): a missing item is just an item whose fields are
+  all `None`. The one adjustment needed: lot/contract totals roll up from
+  **zero**, not `None`, for a data-gap skeleton, so totals actually
+  populate as items get filled in instead of staying `None` forever.
+- `GET /sample/extract/{bidder}/recommendations` suggests a peer-median
+  CIF/erection total per item from every bidder with real pricing —
+  advisory only, shown as a one-click "use suggestion" action in the
+  Explorer edit UI.
+- Per-item "unquoted" flags are suppressed for `is_missing` items (a
+  ~400-item skeleton would otherwise produce ~400 near-duplicate flags);
+  replaced with one `critical`/`"missing"` flag per lot.
+- **Caught during manual verification, not code review**: a partially
+  filled data-gap bidder (ELMEC, 2 of ~400 items manually entered) was
+  numerically the lowest total in its lot and got the Compare page's green
+  "Lowest" badge — exactly the kind of thing that looks fine in a demo and
+  is actively misleading in a procurement tool. Fixed by excluding
+  data-gap bidders from the lowest-bid ranking pool entirely (regardless
+  of how much of their BOQ is filled in) and giving them a distinct
+  "Data gap — needs entry" badge instead.
+- Known scope limit: same in-memory-only caveat as the correction
+  fail-safe above.

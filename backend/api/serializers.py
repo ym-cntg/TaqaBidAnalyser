@@ -19,6 +19,7 @@ def serialize_item(item: BOQItem) -> dict:
         "raw_cif": item.raw_cif,
         "raw_erection": item.raw_erection,
         "is_corrected": item.is_corrected,
+        "is_missing": item.is_missing,
     }
 
 
@@ -52,6 +53,7 @@ def serialize_extraction(ext: BOQExtraction) -> dict:
         "round_name": ext.round_name,
         "lots": [serialize_lot(l) for l in ext.lots],
         "total_contract_price": ext.total_contract_price,
+        "data_gap": ext.data_gap,
     }
 
 

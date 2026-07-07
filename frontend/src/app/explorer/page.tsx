@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Pencil, Check, X, Undo2 } from "lucide-react";
+import { Pencil, Check, X, Undo2, AlertTriangle, Sparkles } from "lucide-react";
 import {
   Select,
   SelectContent,
@@ -16,10 +16,12 @@ import {
   extractBidder,
   correctItem,
   revertItem,
+  getRecommendations,
   type Bidder,
   type BOQExtraction,
   type BOQItem,
   type EditableItemField,
+  type Recommendation,
 } from "@/lib/api";
 
 const EDITABLE_TEXT_FIELDS: EditableItemField[] = ["description", "unit"];
@@ -69,6 +71,7 @@ export default function ExplorerPage() {
   const [editValues, setEditValues] = useState<Record<string, string>>({});
   const [savingItemNo, setSavingItemNo] = useState<string | null>(null);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const [recommendations, setRecommendations] = useState<Record<string, Recommendation>>({});
 
   useEffect(() => {
     getBidders().then((b) => {
@@ -80,11 +83,17 @@ export default function ExplorerPage() {
   useEffect(() => {
     if (!selectedBidder) return;
     setLoading(true);
+    setRecommendations({});
     extractBidder(selectedBidder)
       .then((ext) => {
         setCurrentExtraction(ext);
         setSelectedLot(0);
         setSelectedSheet(0);
+        if (ext.data_gap) {
+          getRecommendations(selectedBidder)
+            .then(setRecommendations)
+            .catch(() => setRecommendations({}));
+        }
       })
       .finally(() => setLoading(false));
   }, [selectedBidder]);
@@ -93,6 +102,16 @@ export default function ExplorerPage() {
     setSaveError(null);
     setEditingItemNo(item.item_no);
     setEditValues(itemToEditValues(item));
+  }
+
+  function applyRecommendation(lotNumber: number, itemNo: string) {
+    const rec = recommendations[`${lotNumber}:${itemNo}`];
+    if (!rec) return;
+    setEditValues((v) => ({
+      ...v,
+      cif_total: String(Math.round(rec.recommended_cif_total)),
+      erection_total: String(Math.round(rec.recommended_erection_total)),
+    }));
   }
 
   function cancelEdit() {
@@ -178,6 +197,7 @@ export default function ExplorerPage() {
             {bidders.map((b) => (
               <SelectItem key={b.name} value={b.name}>
                 {b.name}
+                {b.data_gap ? " ⚠" : ""}
               </SelectItem>
             ))}
           </SelectContent>
@@ -190,6 +210,24 @@ export default function ExplorerPage() {
         </div>
       ) : currentExtraction ? (
         <>
+          {currentExtraction.data_gap && (
+            <div className="flex items-start gap-3 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm">
+              <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0 text-amber-600" />
+              <div>
+                <p className="font-medium text-amber-800 dark:text-amber-400">
+                  Data gap — no per-item BOQ was extractable for this bidder
+                </p>
+                <p className="text-muted-foreground mt-0.5">{currentExtraction.data_gap}</p>
+                <p className="text-muted-foreground mt-1">
+                  Rows below are the standard item template with prices missing. Click{" "}
+                  <Pencil className="inline h-3 w-3 mx-0.5" /> on a row to enter it manually —{" "}
+                  <Sparkles className="inline h-3 w-3 mx-0.5 text-amber-600" /> pre-fills a
+                  peer-median suggestion where available, which you can accept or adjust.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* Contract total */}
           <Card>
             <CardContent className="pt-4 flex items-center justify-between">
@@ -395,6 +433,21 @@ export default function ExplorerPage() {
                               </td>
                               <td className="px-2 py-2">
                                 <div className="flex items-center justify-center gap-1.5">
+                                  {recommendations[`${currentLot.lot_number}:${item.item_no}`] && (
+                                    <button
+                                      disabled={isSaving}
+                                      onClick={() =>
+                                        applyRecommendation(currentLot.lot_number, item.item_no)
+                                      }
+                                      className="p-1 rounded hover:bg-amber-500/10 text-amber-600 disabled:opacity-50"
+                                      title={`Use peer-median suggestion (from ${
+                                        recommendations[`${currentLot.lot_number}:${item.item_no}`]
+                                          .peer_count
+                                      } bidders)`}
+                                    >
+                                      <Sparkles className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
                                   <button
                                     disabled={isSaving}
                                     onClick={() =>
@@ -425,9 +478,11 @@ export default function ExplorerPage() {
                             className={`border-t border-border/60 transition-colors ${
                               item.is_section_header
                                 ? "bg-primary/[0.05] font-semibold"
-                                : item.is_corrected
-                                  ? "bg-amber-500/[0.07] hover:bg-amber-500/[0.12]"
-                                  : "odd:bg-muted/[0.15] hover:bg-primary/[0.04]"
+                                : item.is_missing
+                                  ? "bg-red-500/[0.06] hover:bg-red-500/[0.1]"
+                                  : item.is_corrected
+                                    ? "bg-amber-500/[0.07] hover:bg-amber-500/[0.12]"
+                                    : "odd:bg-muted/[0.15] hover:bg-primary/[0.04]"
                             }`}
                           >
                             <td className="px-3 py-2 font-mono text-xs">
@@ -446,6 +501,14 @@ export default function ExplorerPage() {
                                   className="ml-2 text-[10px] bg-amber-500/15 text-amber-700 dark:text-amber-400"
                                 >
                                   Corrected
+                                </Badge>
+                              )}
+                              {item.is_missing && (
+                                <Badge
+                                  variant="secondary"
+                                  className="ml-2 text-[10px] bg-red-500/15 text-red-700 dark:text-red-400"
+                                >
+                                  Needs entry
                                 </Badge>
                               )}
                             </td>

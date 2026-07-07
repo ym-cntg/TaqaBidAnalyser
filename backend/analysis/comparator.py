@@ -66,6 +66,7 @@ def _build_item_map(lot: BOQLot) -> dict[str, dict]:
                     "raw_cif": item.raw_cif,
                     "raw_erection": item.raw_erection,
                     "is_corrected": item.is_corrected,
+                    "is_missing": item.is_missing,
                 }
     return item_map
 
@@ -82,6 +83,12 @@ def _detect_flags(
     for sheet in lot.sheets:
         for item in sheet.items:
             if item.is_section_header or not item.item_no:
+                continue
+
+            # Skeleton items for a whole-bidder data gap (see BOQExtraction.data_gap)
+            # get one lot-level "missing" flag in compare_round() instead of a
+            # per-item unquoted flag on every single row.
+            if item.is_missing:
                 continue
 
             # Unquoted items — only flag if qty exists but no pricing at all
@@ -335,6 +342,7 @@ def _match_bidders_for_lot(
                     "erection_total": d["erection_total"],
                     "total": d["total"],
                     "is_corrected": d.get("is_corrected", False),
+                    "is_missing": d.get("is_missing", False),
                 }
             else:
                 prices[bidder_name] = {
@@ -342,6 +350,7 @@ def _match_bidders_for_lot(
                     "erection_total": None,
                     "total": None,
                     "is_corrected": False,
+                    "is_missing": False,
                 }
 
         # Skip section headers: items where no bidder has any pricing
@@ -404,6 +413,16 @@ def compare_round(
                     all_flags.extend(
                         _detect_flags(bidder_name, lot, bidder_items.get(bidder_name, {}), bidder_items)
                     )
+                    if extraction.data_gap:
+                        all_flags.append(Flag(
+                            severity="critical",
+                            category="missing",
+                            bidder=bidder_name,
+                            lot=lot.lot_name,
+                            item_no="ALL",
+                            description="Original-round submission",
+                            detail=extraction.data_gap,
+                        ))
 
         lot_comparisons.append(LotComparison(
             lot_name=lot_name,
@@ -428,3 +447,38 @@ def compare_round(
         flags=tuple(all_flags),
         bidder_grand_totals=grand_totals,
     )
+
+
+def compute_peer_recommendations(extractions: dict[str, BOQExtraction]) -> dict:
+    """Peer-median CIF/erection totals per (lot, item_no) across the given
+    bidders, used to suggest starting values when a reviewer manually fills
+    in a bidder with a data gap (see `BOQExtraction.data_gap`). Callers
+    should exclude any other data-gap bidders from `extractions` first —
+    a skeleton has no real prices to contribute as a "peer" value.
+    """
+    per_item: dict[tuple[int, str], list[tuple[float, float]]] = {}
+    descriptions: dict[tuple[int, str], str] = {}
+
+    for extraction in extractions.values():
+        for lot in extraction.lots:
+            for sheet in lot.sheets:
+                for item in sheet.items:
+                    if item.is_section_header or item.cif_total is None:
+                        continue
+                    key = (lot.lot_number, item.item_no)
+                    per_item.setdefault(key, []).append(
+                        (item.cif_total or 0.0, item.erection_total or 0.0)
+                    )
+                    descriptions.setdefault(key, item.description)
+
+    result = {}
+    for (lot_number, item_no), values in per_item.items():
+        result[f"{lot_number}:{item_no}"] = {
+            "lot_number": lot_number,
+            "item_no": item_no,
+            "description": descriptions.get((lot_number, item_no), ""),
+            "recommended_cif_total": statistics.median(v[0] for v in values),
+            "recommended_erection_total": statistics.median(v[1] for v in values),
+            "peer_count": len(values),
+        }
+    return result

@@ -22,6 +22,7 @@ class BOQItem:
     raw_cif: str | None = None  # original cell value (for "Included", "N/A" etc.)
     raw_erection: str | None = None
     is_corrected: bool = False  # True if a user overrode the OCR/extracted value
+    is_missing: bool = False  # True if no source data exists at all (data-gap skeleton item)
 
 
 @dataclass(frozen=True)
@@ -47,6 +48,11 @@ class BOQExtraction:
     round_name: str
     lots: tuple[BOQLot, ...]
     total_contract_price: float | None = None
+    # Set when no genuine per-item BOQ source exists for this bidder/round (e.g.
+    # only a lot-summary document was submitted) — lots/items are then a
+    # skeleton cloned from a reference bidder's item structure, all pricing
+    # fields None and is_missing=True, awaiting manual reviewer entry.
+    data_gap: str | None = None
 
 
 INCLUDED_MARKERS = {"included", "inc", "incl", "included above", "included in"}

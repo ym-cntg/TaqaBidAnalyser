@@ -74,10 +74,16 @@ scope until this is true.
       Verified against the real DANWAY OCR bug. In-memory only for now;
       needs persistence before this is more than a demo (see Week 3). See
       `PROGRESS.md` and `BUG_TRACKER.md`, 2026-07-07.
-- [ ] Decide & implement a policy for bidders with data gaps like ELMEC's
-      (exclude vs. flag-and-include vs. request re-extraction) — right now
-      it's silently excluded, which is correct for this sample but needs a
-      documented rule for real tenders
+- [x] Decide & implement a policy for bidders with data gaps like ELMEC's —
+      went with **manual add with recommendations** rather than silent
+      exclusion or flag-only: the bidder is listed with `data_gap` set, its
+      item structure is cloned from a reference bidder as an unpriced
+      skeleton, and a reviewer fills it in through the same edit UI as an
+      OCR correction, sped up by peer-median suggestions. Also fixed a
+      real trust bug this surfaced: a partially-filled data-gap bidder was
+      winning "Lowest" on an incomplete total — now excluded from that
+      ranking until real. See `PROGRESS.md` and `BUG_TRACKER.md`,
+      2026-07-07.
 - [ ] Add a lightweight regression check (script or test) that fails the
       build if: a lot's CIF+Erection split is wildly asymmetric vs. peers
       without a flagged reason, any item description contains
@@ -184,6 +190,7 @@ business-case owners.
 | Must | Report export (Excel/HTML download) | Week 3 |
 | Must | UAT against Mohammed's manual sheet | Week 4 |
 | Must | Manual correction fail-safe for OCR/extraction errors | Week 1 |
+| Must | Data-gap policy (manual add + peer recommendations) | Week 1 |
 | Should | Dashboard page rebuild | Week 2 |
 | Should | Flags & Insights page rebuild | Week 2 |
 | Should | Cache extraction failures | Week 3 |

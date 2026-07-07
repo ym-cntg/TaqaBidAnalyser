@@ -93,6 +93,12 @@ def apply_corrections(ext: BOQExtraction, bidder: str) -> BOQExtraction:
     if not overrides:
         return ext
 
+    # A data-gap skeleton starts every total at None ("nothing entered
+    # yet"), not at a real (if incomplete) figure — so once a reviewer
+    # starts manually filling it in, totals need to accumulate from zero
+    # rather than staying None forever (None + delta is still None).
+    is_gap_skeleton = ext.data_gap is not None
+
     new_lots = []
     for lot in ext.lots:
         lot_delta_cif = 0.0
@@ -113,7 +119,9 @@ def apply_corrections(ext: BOQExtraction, bidder: str) -> BOQExtraction:
                 old_erection = item.erection_total or 0.0
                 old_total = item.total or 0.0
 
-                updated = dataclasses.replace(item, **record["fields"], is_corrected=True)
+                updated = dataclasses.replace(
+                    item, **record["fields"], is_corrected=True, is_missing=False
+                )
 
                 # If the reviewer only touched CIF/erection, re-derive the
                 # combined total rather than leaving it stale.
@@ -138,22 +146,26 @@ def apply_corrections(ext: BOQExtraction, bidder: str) -> BOQExtraction:
             )
 
         if lot_changed:
+            base_cif = 0.0 if is_gap_skeleton else lot.total_cif
+            base_erection = 0.0 if is_gap_skeleton else lot.total_erection
+            base_price = 0.0 if is_gap_skeleton else lot.total_price
             lot = dataclasses.replace(
                 lot,
                 sheets=tuple(new_sheets),
-                total_cif=None if lot.total_cif is None else lot.total_cif + lot_delta_cif,
-                total_erection=None if lot.total_erection is None else lot.total_erection + lot_delta_erection,
-                total_price=None if lot.total_price is None else lot.total_price + lot_delta_total,
+                total_cif=None if base_cif is None else base_cif + lot_delta_cif,
+                total_erection=None if base_erection is None else base_erection + lot_delta_erection,
+                total_price=None if base_price is None else base_price + lot_delta_total,
             )
         new_lots.append(lot)
 
     new_lots = tuple(new_lots)
+    base_contract_price = 0.0 if is_gap_skeleton else ext.total_contract_price
     total_contract_price = ext.total_contract_price
-    if total_contract_price is not None:
+    if base_contract_price is not None:
         contract_delta = sum(
             (nl.total_price or 0.0) - (ol.total_price or 0.0)
             for nl, ol in zip(new_lots, ext.lots)
         )
-        total_contract_price = total_contract_price + contract_delta
+        total_contract_price = base_contract_price + contract_delta
 
     return dataclasses.replace(ext, lots=new_lots, total_contract_price=total_contract_price)

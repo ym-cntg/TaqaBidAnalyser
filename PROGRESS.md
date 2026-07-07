@@ -10,6 +10,54 @@ narrates the story, that file is the reference table.
 
 ---
 
+## 2026-07-07 — Data-gap policy: manual add with recommendations (BUG-004/ELMEC)
+
+Resolves the open Week 1 sprint item: "decide & implement a policy for
+bidders with data gaps like ELMEC's." Three options were on the table
+(exclude / flag-and-include / request re-extraction) — went with a fourth,
+more useful one: **include the bidder with the status visible, and let a
+reviewer manually build their BOQ**, pre-filled with peer-median
+recommendations to speed it up. Silently excluding (the prior behavior)
+made a whole bidder disappear from the tool with no trace; flag-and-include
+without real data would just be noise with nothing to act on.
+
+- **Backend** (`routes.py::_build_gap_skeleton()`): when a bidder's
+  original round yields nothing extractable (BUG-004's ELMEC case — only a
+  lot-summary document, no detail BOQ) but a genuine `original/` folder
+  exists, clone the item skeleton (item_no, description, unit, qty — the
+  same across bidders per the ADDC-standard template) from another bidder
+  that does have real data. Every pricing field is wiped and each item
+  gets `is_missing=True`. This is a normal-shaped `BOQExtraction` with
+  nothing priced yet, tagged `data_gap: <reason>`.
+- **Manual entry reuses the correction mechanism** built earlier today —
+  a skeleton item is just an item whose fields happen to all be `None`;
+  filling one in via `POST .../correct` is indistinguishable from fixing
+  an OCR error, including the delta-based total rollup. The only change
+  needed there: rollup starts lot/contract totals from **zero** instead of
+  `None` when the extraction is a data-gap skeleton, since `None + delta`
+  would otherwise stay `None` forever as items get filled in.
+- **Recommendations** (`comparator.py::compute_peer_recommendations()`,
+  `GET /sample/extract/{bidder}/recommendations`): peer-median CIF/erection
+  total per (lot, item_no) across every bidder with real pricing. Purely
+  advisory — a reviewer can accept, adjust, or ignore it.
+- **Flags**: a data-gap bidder's ~400 blank items no longer spam the flag
+  list with one "unquoted" flag apiece — suppressed for `is_missing` items
+  and replaced with a single `critical`/`"missing"` flag per lot stating
+  the gap and reason.
+- **`list_sample_bidders()` no longer silently excludes** — ELMEC now
+  appears with `data_gap` set, rather than vanishing with no explanation.
+- **Frontend**: Explorer shows an amber banner explaining the gap, a
+  per-row "Needs entry" badge, and a suggestion (sparkle icon) button in
+  edit mode that pre-fills the peer-median recommendation. Compare page:
+  fixed a real trust bug caught during manual testing — a partially-filled
+  data-gap bidder (2 of ~400 items entered) was numerically "lowest" and
+  got the green "Lowest" badge, which would be actively misleading in a
+  procurement tool. Data-gap bidders are now excluded from the lowest-bid
+  ranking pool entirely and get a "Data gap — needs entry" badge instead,
+  regardless of how much of their BOQ has been filled in.
+- **Known scope limit**: same as the correction fail-safe above — in-memory
+  only, lost on restart.
+
 ## 2026-07-07 — Manual correction fail-safe for OCR/extraction errors
 
 DATA-001/DATA-002 below can be *detected* automatically (cross-lot flag),

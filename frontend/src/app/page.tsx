@@ -6,6 +6,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
   getComparison,
+  getBidders,
   type ComparisonResult,
   type ComparisonItem,
 } from "@/lib/api";
@@ -82,6 +83,7 @@ export default function ComparePage() {
   const [searchTerm, setSearchTerm] = useState("");
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set());
   const [highlightUnmatched, setHighlightUnmatched] = useState(false);
+  const [dataGapBidders, setDataGapBidders] = useState<Set<string>>(new Set());
 
   useEffect(() => {
     getComparison()
@@ -90,6 +92,9 @@ export default function ComparePage() {
         if (c.lots.length > 0) setSelectedLot(c.lots[0].lot_number);
       })
       .finally(() => setLoading(false));
+    getBidders().then((bidders) => {
+      setDataGapBidders(new Set(bidders.filter((b) => b.data_gap).map((b) => b.name)));
+    });
   }, []);
 
   const currentLot = comparison?.lots.find((l) => l.lot_number === selectedLot);
@@ -198,11 +203,17 @@ export default function ComparePage() {
       {currentLot && (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {Object.entries(currentLot.bidder_totals).map(([bidder, totals]) => {
-            const allTotals = Object.values(currentLot.bidder_totals)
-              .map((t) => t.total)
+            const isDataGap = dataGapBidders.has(bidder);
+            // A data-gap bidder's total may be partially (or not at all) manually
+            // entered — it's never a fair basis for "Lowest" until the reviewer
+            // has filled in the whole BOQ, so exclude it from the ranking pool
+            // entirely rather than letting an incomplete total win by default.
+            const allTotals = Object.entries(currentLot.bidder_totals)
+              .filter(([b]) => !dataGapBidders.has(b))
+              .map(([, t]) => t.total)
               .filter((t): t is number => t != null);
             const isLowest =
-              totals.total != null && totals.total === Math.min(...allTotals);
+              !isDataGap && totals.total != null && totals.total === Math.min(...allTotals);
 
             return (
               <Card
@@ -228,6 +239,14 @@ export default function ComparePage() {
                     {isLowest && (
                       <Badge className="bg-emerald-600 text-white">
                         Lowest
+                      </Badge>
+                    )}
+                    {isDataGap && (
+                      <Badge
+                        variant="secondary"
+                        className="bg-amber-500/15 text-amber-700 dark:text-amber-400"
+                      >
+                        Data gap — needs entry
                       </Badge>
                     )}
                   </div>

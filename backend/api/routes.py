@@ -5,13 +5,15 @@ Original-bidding skeleton: this branch only ever looks at each bidder's
 upload, and multi-round comparison are out of scope here.
 """
 
+import dataclasses
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
+from ..extraction.excel_parser import BOQExtraction
 from ..extraction.router import parse_bidder_folder_pdf as parse_bidder_folder
-from ..analysis.comparator import compare_round
+from ..analysis.comparator import compare_round, compute_peer_recommendations
 from ..analysis.corrections import (
     EDITABLE_FIELDS,
     apply_corrections,
@@ -44,10 +46,96 @@ def _get_raw_extractions(bidder_path: Path, bidder_name: str):
     return _raw_bidder_cache[key]
 
 
-def _get_bidder_extractions(bidder_path: Path, bidder_name: str):
-    """Raw extraction with any recorded user corrections applied."""
+def _build_gap_skeleton(bidder_path: Path, bidder_name: str) -> BOQExtraction | None:
+    """Build a manual-entry skeleton for a bidder with no extractable BOQ.
+
+    Policy for data gaps (bidders like ELMEC, whose original-round folder
+    only contains a lot-summary document, not a per-item BOQ): don't
+    silently exclude them. Clone the item structure (item_no, description,
+    unit, qty — identical across bidders per the ADDC-standard template)
+    from another bidder that does have real original-round data, wipe every
+    pricing field, and mark each item `is_missing=True`. This becomes a
+    normal-looking extraction with nothing priced yet — a reviewer fills it
+    in through the same correction/edit endpoints used for OCR fixes.
+    """
+    original_dir = bidder_path / "original"
+    has_original = original_dir.is_dir() and (
+        (original_dir / "excel").exists() or (original_dir / "pdf").exists()
+    )
+    if not has_original:
+        return None  # nothing was even submitted — not a data-gap case
+
+    reference = None
+    for d in sorted(bidder_path.parent.iterdir()):
+        if not d.is_dir() or d.name == bidder_name:
+            continue
+        ref_raw = _get_raw_extractions(d, d.name)
+        if ref_raw:
+            reference = ref_raw[0]
+            break
+    if reference is None:
+        return None  # no other bidder's structure to clone from
+
+    blank_lots = []
+    for lot in reference.lots:
+        blank_sheets = []
+        for sheet in lot.sheets:
+            blank_items = tuple(
+                dataclasses.replace(
+                    item,
+                    cif_unit_rate=None,
+                    cif_total=None,
+                    erection_unit_rate=None,
+                    erection_total=None,
+                    total=None,
+                    raw_cif=None,
+                    raw_erection=None,
+                    is_corrected=False,
+                    is_missing=not item.is_section_header,
+                )
+                for item in sheet.items
+            )
+            blank_sheets.append(dataclasses.replace(sheet, items=blank_items))
+        blank_lots.append(dataclasses.replace(
+            lot,
+            sheets=tuple(blank_sheets),
+            total_cif=None,
+            total_erection=None,
+            total_price=None,
+        ))
+
+    return BOQExtraction(
+        tender_no=reference.tender_no,
+        bidder=bidder_name,
+        round_name="original",
+        lots=tuple(blank_lots),
+        total_contract_price=None,
+        data_gap=(
+            "No per-item detail BOQ was found for this bidder's original-round "
+            "submission (only a lot-summary document, if anything, was "
+            "available to extract). The item structure below is the "
+            "ADDC-standard template, cloned from another bidder's submission "
+            "for reference — every price needs manual entry before this "
+            "bidder can be meaningfully compared."
+        ),
+    )
+
+
+def _get_base_extractions(bidder_path: Path, bidder_name: str):
+    """Raw parsed extraction, or a data-gap skeleton if nothing could be
+    extracted at all but the bidder did submit an original-round folder."""
     raw = _get_raw_extractions(bidder_path, bidder_name)
-    return [apply_corrections(ext, bidder_name) for ext in raw]
+    if raw:
+        return raw
+    skeleton = _build_gap_skeleton(bidder_path, bidder_name)
+    return [skeleton] if skeleton else []
+
+
+def _get_bidder_extractions(bidder_path: Path, bidder_name: str):
+    """Base extraction (raw, or a data-gap skeleton) with any recorded user
+    corrections/manual entries applied."""
+    base = _get_base_extractions(bidder_path, bidder_name)
+    return [apply_corrections(ext, bidder_name) for ext in base]
 
 
 def _find_raw_item(extraction, lot_number: int, sheet_name: str, item_no: str):
@@ -78,13 +166,13 @@ class ItemCorrectionKey(BaseModel):
 
 @router.get("/sample/bidders")
 async def list_sample_bidders():
-    """List bidders with genuinely extractable original-round data.
+    """List bidders with an original-round submission.
 
-    Filesystem presence isn't enough — a bidder can have an original/
-    folder that only contains a lot-summary document (no real per-item
-    BOQ), which extracts to nothing. Only list bidders whose original
-    round actually yields usable data, so the frontend never offers a
-    selection that dead-ends.
+    A bidder whose original round has no genuine per-item BOQ source (e.g.
+    ELMEC, whose folder only contains a lot-summary document) is still
+    listed — with `data_gap` set to an explanation — rather than silently
+    excluded. The frontend surfaces it as needing manual entry instead of
+    the bidder just disappearing without a trace.
     """
     power_dir = DATA_DIR / "power"
     if not power_dir.exists():
@@ -100,8 +188,10 @@ async def list_sample_bidders():
         )
         if not has_original:
             continue
-        if _get_bidder_extractions(d, d.name):
-            bidders.append({"name": d.name})
+        extractions = _get_bidder_extractions(d, d.name)
+        if not extractions:
+            continue
+        bidders.append({"name": d.name, "data_gap": extractions[0].data_gap})
     return bidders
 
 
@@ -155,11 +245,11 @@ async def correct_item(bidder: str, body: ItemCorrectionRequest):
     if not bidder_path.exists():
         raise HTTPException(404, f"Bidder '{bidder}' not found")
 
-    raw = _get_raw_extractions(bidder_path, bidder)
-    if not raw:
+    base = _get_base_extractions(bidder_path, bidder)
+    if not base:
         raise HTTPException(404, f"No original-round data found for '{bidder}'")
 
-    raw_item = _find_raw_item(raw[0], body.lot_number, body.sheet_name, body.item_no)
+    raw_item = _find_raw_item(base[0], body.lot_number, body.sheet_name, body.item_no)
     if raw_item is None:
         raise HTTPException(404, "Item not found")
 
@@ -188,3 +278,29 @@ async def revert_item(bidder: str, body: ItemCorrectionKey):
 async def get_corrections(bidder: str):
     """List every correction currently applied to a bidder's data."""
     return list_corrections(bidder)
+
+
+@router.get("/sample/extract/{bidder}/recommendations")
+async def get_recommendations(bidder: str):
+    """Peer-median suggested values for manually filling in a bidder with a
+    data gap (see `BOQExtraction.data_gap`) — computed from every other
+    bidder that has real pricing, excluding any other data-gap bidders
+    (a skeleton has nothing real to offer as a peer value). Purely advisory:
+    a reviewer can accept, adjust, or ignore these when correcting an item.
+    """
+    power_dir = DATA_DIR / "power"
+    if not power_dir.exists():
+        raise HTTPException(404, "No sample data found")
+
+    peer_extractions = {}
+    for bidder_dir in sorted(power_dir.iterdir()):
+        if not bidder_dir.is_dir() or bidder_dir.name == bidder:
+            continue
+        extractions = _get_bidder_extractions(bidder_dir, bidder_dir.name)
+        if extractions and not extractions[0].data_gap:
+            peer_extractions[bidder_dir.name] = extractions[0]
+
+    if not peer_extractions:
+        raise HTTPException(404, "No peer data available for recommendations")
+
+    return compute_peer_recommendations(peer_extractions)

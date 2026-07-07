@@ -23,6 +23,7 @@ async function postAPI<T>(path: string, body: unknown): Promise<T> {
 
 export interface Bidder {
   name: string;
+  data_gap: string | null;
 }
 
 export interface BOQItem {
@@ -39,6 +40,7 @@ export interface BOQItem {
   raw_cif: string | null;
   raw_erection: string | null;
   is_corrected: boolean;
+  is_missing: boolean;
 }
 
 export type EditableItemField =
@@ -73,6 +75,16 @@ export interface BOQExtraction {
   round_name: string;
   lots: BOQLot[];
   total_contract_price: number | null;
+  data_gap: string | null;
+}
+
+export interface Recommendation {
+  lot_number: number;
+  item_no: string;
+  description: string;
+  recommended_cif_total: number;
+  recommended_erection_total: number;
+  peer_count: number;
 }
 
 export interface ComparisonItem {
@@ -82,7 +94,13 @@ export interface ComparisonItem {
   qty: number | null;
   bidder_prices: Record<
     string,
-    { cif_total: number | null; erection_total: number | null; total: number | null; is_corrected: boolean }
+    {
+      cif_total: number | null;
+      erection_total: number | null;
+      total: number | null;
+      is_corrected: boolean;
+      is_missing: boolean;
+    }
   >;
   match_method: "exact" | "normalized" | "fuzzy" | "llm" | "unmatched";
   match_confidence: number;
@@ -153,4 +171,8 @@ export async function revertItem(
     sheet_name: sheetName,
     item_no: itemNo,
   });
+}
+
+export async function getRecommendations(bidder: string): Promise<Record<string, Recommendation>> {
+  return fetchAPI(`/api/sample/extract/${encodeURIComponent(bidder)}/recommendations`);
 }

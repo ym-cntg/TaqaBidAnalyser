@@ -10,6 +10,49 @@ narrates the story, that file is the reference table.
 
 ---
 
+## 2026-07-07 — Regression check for extraction correctness
+
+Last open item from the Week 1 sprint checklist that didn't already fall
+out of today's other work: a script that fails loudly if the three bug
+classes already found once (BUG-001, BUG-002, BUG-003) ever come back.
+
+- **`backend/regression_check.py`**, run via
+  `uv run python -m backend.regression_check`. Three checks, each mapped
+  to a real bug already found in this project:
+  - **Subtotal/recap leak (BUG-001)** — mirrors the exact keyword/regex
+    filtering `pdf_parser.py`/`ocr_parser.py` already do at parse time, so
+    a regression in that filtering (not a new extraction path skipping it)
+    gets caught independently.
+  - **Missing contract total (BUG-003)** — any bidder without a
+    documented `data_gap` (see below) must have a non-`None`
+    `total_contract_price`.
+  - **Unflagged unbalanced lot (BUG-002's symptom)** — a lot's CIF share
+    of the total, compared against the *peer median* for that same lot
+    across other bidders (not a fixed threshold in isolation, same
+    reasoning as the cross-lot flag): if one bidder is both over 90% CIF
+    *and* far from what peers show, and nothing in the flag list
+    (`unbalanced`/`cross_lot`/`missing`) already explains it, that's a
+    silent problem.
+  - Exits 1 with an itemized list on failure, 0 with a summary line on
+    pass — suitable as a CI gate.
+- **Caught a real bug in the check itself while first writing it**: an
+  early version of the item_no recap regex wasn't anchored to the end of
+  the string, so it false-matched real BOQ item numbers like "Item - 4.5"
+  (a legitimate sub-item number, not a recap row) as leaks — 5 false
+  positives across 5 bidders on the very first run. Fixed by copying the
+  production regex (`^item\s*-?\s*\d+$`, anchored) verbatim instead of
+  re-deriving a looser one.
+- **Verified the check actually catches regressions**, not just passes
+  trivially: injected each of the three failure modes into synthetic
+  `BOQExtraction` data and confirmed each one is caught, plus confirmed a
+  documented `data_gap` bidder is correctly exempted from the missing-total
+  check.
+- Currently passes clean against the full sample dataset: 7 bidders (real
+  data), 21 lots, 8,874 flags, zero unresolved issues. ELMEC (data gap,
+  see below) is naturally excluded since this script parses raw source
+  files directly rather than going through the API's skeleton-building
+  logic — it only checks bidders it actually got real data for.
+
 ## 2026-07-07 — Data-gap policy: manual add with recommendations (BUG-004/ELMEC)
 
 Resolves the open Week 1 sprint item: "decide & implement a policy for

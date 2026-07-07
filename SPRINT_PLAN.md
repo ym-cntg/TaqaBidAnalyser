@@ -84,10 +84,15 @@ scope until this is true.
       winning "Lowest" on an incomplete total — now excluded from that
       ranking until real. See `PROGRESS.md` and `BUG_TRACKER.md`,
       2026-07-07.
-- [ ] Add a lightweight regression check (script or test) that fails the
-      build if: a lot's CIF+Erection split is wildly asymmetric vs. peers
-      without a flagged reason, any item description contains
-      total/subtotal keywords, or a bidder's contract total is `None`
+- [x] Add a lightweight regression check (`backend/regression_check.py`,
+      `uv run python -m backend.regression_check`) that fails (exit 1) if:
+      a lot's CIF+Erection split is wildly asymmetric vs. peers with no
+      flag already explaining it, any item's description/item_no looks
+      like a subtotal/recap row, or a bidder's contract total is `None`
+      without a documented `data_gap`. Verified it actually catches
+      regressions (not just passing trivially) by injecting each failure
+      mode into synthetic data — all three triggered correctly. Currently
+      passes clean against the full sample dataset (7 bidders, 21 lots).
 - [ ] Decide long-term fate of `src/` (the frozen CLI pipeline) — merge its
       useful parts (report generation, round tracking) into `backend/`, or
       formally deprecate it, rather than letting two implementations drift

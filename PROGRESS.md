@@ -10,6 +10,70 @@ narrates the story, that file is the reference table.
 
 ---
 
+## 2026-07-08 — LLM recommendation report, on branch `ai-negotiation-features`
+
+Built the LLM recommendation report designed in the previous session's
+sprint-plan entry — an on-demand, Azure-OpenAI-generated executive
+summary, award recommendation, and per-bidder negotiation notes, delivered
+both in-app and as downloadable Excel/HTML.
+
+- **Environment fixed first**: `.venv` was a dangling symlink to another
+  machine's path (`/Users/ksahu/...`) and no working Python 3.11/`uv`
+  existed locally — installed `uv`, ran `uv sync` to rebuild `.venv`
+  correctly per `pyproject.toml`/`uv.lock`. Also no `node`/`npm` on `PATH`
+  (present at `/opt/homebrew/bin`, just not linked into the shell).
+- **LLM provider**: uses Azure OpenAI (`AZURE_OPENAI_API_KEY` /
+  `AZURE_OPENAI_ENDPOINT` / `AZURE_OPENAI_API_VERSION` / `AZURE_OPENAI_MODEL`),
+  not the `anthropic` SDK `item_matcher.py`'s LLM tier uses — this project
+  already has an Azure OpenAI resource for LLM features, separate from the
+  Azure Document Intelligence resource used for OCR. `response_format:
+  json_object` used for guaranteed-JSON output rather than boundary-trimmed
+  parsing.
+- **`backend/reporting/digest.py`**: builds a compact digest from
+  `ComparisonResult` — ranked totals (data-gap bidders excluded from
+  ranking, same policy as the Compare page), per-lot totals, flag counts,
+  and the top 6 flags per bidder (one pass per category first, so a lone
+  `arithmetic` flag isn't crowded out by six `outlier` flags) — never the
+  raw per-item tables.
+- **`backend/reporting/llm_report.py`**: calls Azure OpenAI with the
+  digest, demands a single JSON object back matching a fixed schema
+  (`executive_summary`, `recommendation`, `bidder_notes`, `caveats`).
+  **Hard rule enforced twice**: the prompt tells the model data-gap
+  bidders can never be shortlisted/awarded, and `_enforce_data_gap_safety_net()`
+  defensively strips any it does anyway post-parse, logging what it
+  corrected into `caveats` — verified by injecting a synthetic report that
+  wrongly named ELMEC as primary award; the safety net correctly removed
+  it and added a caveat.
+- **`backend/api/routes.py`**: extracted `_get_sample_comparison()` (was
+  duplicated inline in the old `/sample/compare` handler), added
+  `GET /sample/report/status`, `POST /sample/report/generate` (cached
+  in-memory per round, keyed by a digest hash so a plain reload never
+  re-triggers a paid call; `force: true` bypasses the cache), and
+  `GET /sample/report/export.xlsx` / `.html` (require a cached report,
+  never trigger generation themselves).
+- **`backend/reporting/excel_export.py` / `html_export.py`**: styling
+  borrowed by value (not imported — incompatible data model) from the
+  frozen `src/reporting/` reference. **Bug caught during verification**:
+  first version dumped all of `result.flags` (8,874 rows, since outlier
+  detection is pairwise across every bidder) into the Flags
+  sheet/table — a 2MB HTML file with no relationship to what the LLM
+  narrative actually referenced. Fixed to use the same top-6-per-bidder
+  `top_flags` digest the LLM saw; output dropped to ~10KB/17KB.
+- **Frontend**: new `/report` page (`frontend/src/app/report/page.tsx`,
+  linked from the sidebar) with `idle` / `generating` / `loaded` / `error`
+  / `not_configured` states — the last one matters immediately, since
+  Azure OpenAI isn't configured yet in this environment (`.env` has empty
+  placeholders for the four `AZURE_OPENAI_*` vars). Verified the
+  `not_configured` state for real via Playwright; verified the `loaded`
+  state by mocking the API responses (no real key available yet) —
+  executive summary, recommendation badges, caveats callout, and
+  per-bidder note cards (including ELMEC's muted "Data gap — excluded"
+  card) all render correctly.
+- **Not yet verified**: an actual live Azure OpenAI call — needs real
+  credentials in `.env` before that path can be tested end-to-end.
+
+---
+
 ## 2026-07-07 — Prompt-injection chain found and neutralized in `frontend/AGENTS.md`
 
 While planning the AI recommendation-report feature, a research subagent

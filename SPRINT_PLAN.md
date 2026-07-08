@@ -196,23 +196,32 @@ but not built, so this doesn't stay implicit across `backend/analysis/`.
 | Peer-median recommendations for data-gap manual entry | Rule-based (median) | Shipped — `backend/analysis/corrections.py` | Week 1 |
 | Round-over-round anomaly flags (jump >2x with no explanation) | Rule-based | Planned | Week 2 |
 | Description-change detection across bidders/rounds | Rule-based (text similarity) | Planned | Week 3 |
-| **LLM recommendation report** — executive summary, award recommendation, per-bidder negotiation notes | Genuine LLM (Claude, on-demand button) | Designed this session, not yet built | New — propose Week 3, alongside report export |
+| **LLM recommendation report** — executive summary, award recommendation, per-bidder negotiation notes | Genuine LLM (Azure OpenAI, on-demand button) | **Built**, branch `ai-negotiation-features` — real API call not yet verified (no Azure OpenAI credentials in this environment yet) | Week 3 |
 | Vendor financial-standing / capacity risk narrative (per Business Case "final evaluation" step) | Would be LLM, but needs financial/capacity documents we don't currently ingest | Not started — blocked on data source, not effort | Backlog, no ETA |
 
-**LLM recommendation report — design summary** (full plan in session notes,
-not yet a tracked file): one on-demand endpoint builds a compact *digest*
-from the existing `ComparisonResult` (ranked totals, flag counts, top
-flags per bidder — never the raw per-item tables) and sends it to Claude
-for a structured JSON response (`executive_summary`, `recommendation`,
-`bidder_notes`, `caveats`). Hard rule carried over from the Compare-page
-fix earlier this week: **data-gap bidders (`extraction.data_gap` set) can
-never be shortlisted or recommended for award**, enforced both in the
-prompt and defensively after parsing the LLM's response. Delivered both
-in-app (`/report`, new page) and as downloadable Excel/HTML, cached
-in-memory per round with an explicit "regenerate" action so re-viewing the
-page never silently re-triggers a paid LLM call. Reuses the same
-`ANTHROPIC_API_KEY`/graceful-degradation pattern already proven in
-`item_matcher.py`.
+**LLM recommendation report — as built** (`backend/reporting/`,
+`frontend/src/app/report/page.tsx`, see `PROGRESS.md` 2026-07-08): one
+on-demand endpoint (`POST /api/sample/report/generate`) builds a compact
+*digest* from the existing `ComparisonResult` (ranked totals, flag counts,
+top 6 flags per bidder — never the raw per-item tables) and sends it to
+**Azure OpenAI** (`AZURE_OPENAI_API_KEY`/`AZURE_OPENAI_ENDPOINT`/
+`AZURE_OPENAI_API_VERSION`/`AZURE_OPENAI_MODEL` — a separate resource from
+the Azure Document Intelligence one used for OCR, and from the `anthropic`
+SDK `item_matcher.py`'s LLM tier uses) for a structured JSON response
+(`executive_summary`, `recommendation`, `bidder_notes`, `caveats`). Hard
+rule carried over from the Compare-page fix earlier this week: **data-gap
+bidders can never be shortlisted or recommended for award** — enforced in
+the prompt *and* defensively after parsing (`_enforce_data_gap_safety_net`),
+verified against a synthetic report that violated the rule on purpose.
+Delivered both in-app (`/report`) and as downloadable Excel/HTML, cached
+in-memory per round keyed by a digest hash so a plain reload/reveal never
+re-triggers a paid call — only an explicit "Regenerate" does.
+
+**Still open**: no Azure OpenAI credentials are configured in this
+environment yet (`.env` has empty placeholders), so the `not_configured`
+UI state is verified for real but the actual generation call is only
+verified against mocked responses — needs a real key before Week 3
+sign-off.
 
 **Standing rule for any future LLM feature** (added 2026-07-07 after
 finding an injected instruction in `frontend/node_modules/next/dist/docs/`

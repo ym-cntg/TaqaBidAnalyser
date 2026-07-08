@@ -176,3 +176,69 @@ export async function revertItem(
 export async function getRecommendations(bidder: string): Promise<Record<string, Recommendation>> {
   return fetchAPI(`/api/sample/extract/${encodeURIComponent(bidder)}/recommendations`);
 }
+
+export interface ReportRecommendation {
+  primary_award: string | null;
+  shortlist: string[];
+  reasoning: string;
+}
+
+export interface ReportBidderNote {
+  position: "lowest" | "competitive" | "highest" | "excluded_data_gap" | "unknown";
+  summary: string;
+  negotiation_points: string[];
+  flags_highlighted: string[];
+}
+
+export interface RecommendationReport {
+  executive_summary: string;
+  recommendation: ReportRecommendation;
+  bidder_notes: Record<string, ReportBidderNote>;
+  caveats: string[];
+}
+
+export interface ReportStatus {
+  cached: boolean;
+  generated_at: string | null;
+  llm_configured: boolean;
+  stale: boolean;
+}
+
+export interface ReportGenerateResponse {
+  report: RecommendationReport;
+  generated_at: string;
+  from_cache: boolean;
+}
+
+export class ReportUnavailableError extends Error {
+  reason: "not_configured" | "api_error" | "parse_error";
+  constructor(reason: "not_configured" | "api_error" | "parse_error", message: string) {
+    super(message);
+    this.reason = reason;
+  }
+}
+
+export async function getReportStatus(): Promise<ReportStatus> {
+  return fetchAPI("/api/sample/report/status");
+}
+
+export async function generateReport(force = false): Promise<ReportGenerateResponse> {
+  const res = await fetch(`${API_BASE}/api/sample/report/generate`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ force }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    const detail = body?.detail;
+    if (detail?.reason && detail?.message) {
+      throw new ReportUnavailableError(detail.reason, detail.message);
+    }
+    throw new Error(`API error: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export function reportExportUrl(kind: "xlsx" | "html"): string {
+  return `${API_BASE}/api/sample/report/export.${kind}`;
+}

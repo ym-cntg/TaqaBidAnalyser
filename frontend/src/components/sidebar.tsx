@@ -5,12 +5,14 @@ import { usePathname } from "next/navigation";
 import {
   GitCompareArrows,
   FileSpreadsheet,
+  Sparkles,
   Zap,
 } from "lucide-react";
 
 const navItems = [
   { href: "/", label: "Bid Comparison", icon: GitCompareArrows },
   { href: "/explorer", label: "BOQ Explorer", icon: FileSpreadsheet },
+  { href: "/report", label: "Recommendation Report", icon: Sparkles },
 ];
 
 export function Sidebar() {

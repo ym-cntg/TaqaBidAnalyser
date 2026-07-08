@@ -6,14 +6,18 @@ upload, and multi-round comparison are out of scope here.
 """
 
 import dataclasses
+import hashlib
+import json
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
 from ..extraction.excel_parser import BOQExtraction
 from ..extraction.router import parse_bidder_folder_pdf as parse_bidder_folder
-from ..analysis.comparator import compare_round, compute_peer_recommendations
+from ..analysis.comparator import ComparisonResult, compare_round, compute_peer_recommendations
 from ..analysis.corrections import (
     EDITABLE_FIELDS,
     apply_corrections,
@@ -21,6 +25,10 @@ from ..analysis.corrections import (
     list_corrections,
     record_correction,
 )
+from ..reporting.digest import build_report_digest
+from ..reporting.excel_export import build_excel_report
+from ..reporting.html_export import build_html_report
+from ..reporting.llm_report import ReportUnavailable, generate_recommendation_report
 from .serializers import serialize_extraction, serialize_comparison
 
 router = APIRouter()
@@ -209,9 +217,9 @@ async def extract_sample_bidder(bidder: str):
     return serialize_extraction(extractions[0])
 
 
-@router.get("/sample/compare")
-async def compare_sample_bidders():
-    """Compare all sample bidders' original-round submissions."""
+def _get_sample_comparison() -> ComparisonResult:
+    """Shared by /sample/compare and /sample/report/* — every bidder's
+    original-round submission, compared as one round."""
     power_dir = DATA_DIR / "power"
     if not power_dir.exists():
         raise HTTPException(404, "No sample data found")
@@ -227,8 +235,13 @@ async def compare_sample_bidders():
     if not original_extractions:
         raise HTTPException(404, "No original-round data found")
 
-    result = compare_round(original_extractions, "original")
-    return serialize_comparison(result)
+    return compare_round(original_extractions, "original")
+
+
+@router.get("/sample/compare")
+async def compare_sample_bidders():
+    """Compare all sample bidders' original-round submissions."""
+    return serialize_comparison(_get_sample_comparison())
 
 
 @router.post("/sample/extract/{bidder}/correct")
@@ -304,3 +317,107 @@ async def get_recommendations(bidder: str):
         raise HTTPException(404, "No peer data available for recommendations")
 
     return compute_peer_recommendations(peer_extractions)
+
+
+class ReportGenerateRequest(BaseModel):
+    force: bool = False
+
+
+# In-memory, per-round cache — same limitation as _raw_bidder_cache and the
+# corrections store (lost on restart). digest_hash lets the frontend know a
+# cached report is stale (data changed since it was generated) without
+# forcing an automatic, potentially costly, re-call on every page load.
+_report_cache: dict[str, dict] = {}  # round_name -> {"report", "generated_at", "digest_hash"}
+
+
+def _digest_hash(result: ComparisonResult) -> str:
+    digest = build_report_digest(result)
+    return hashlib.sha256(json.dumps(digest, sort_keys=True, default=str).encode()).hexdigest()
+
+
+@router.get("/sample/report/status")
+async def get_report_status():
+    """Whether a recommendation report is cached, and whether the LLM is
+    even configured — lets the frontend show a clean 'not configured' state
+    instead of letting the user click into a guaranteed failure."""
+    llm_configured = bool(
+        os.environ.get("AZURE_OPENAI_API_KEY")
+        and os.environ.get("AZURE_OPENAI_ENDPOINT")
+        and os.environ.get("AZURE_OPENAI_API_VERSION")
+        and os.environ.get("AZURE_OPENAI_MODEL")
+    )
+    cached = _report_cache.get("original")
+    stale = False
+    if cached:
+        result = _get_sample_comparison()
+        stale = _digest_hash(result) != cached["digest_hash"]
+    return {
+        "cached": cached is not None,
+        "generated_at": cached["generated_at"] if cached else None,
+        "llm_configured": llm_configured,
+        "stale": stale,
+    }
+
+
+@router.post("/sample/report/generate")
+async def generate_report(body: ReportGenerateRequest):
+    """Generate (or return the cached) LLM recommendation report for the
+    original round. A paid LLM call only happens when there's no cached
+    report, the underlying comparison has changed since it was cached, or
+    the caller explicitly forces a regenerate — never on a plain reload."""
+    result = _get_sample_comparison()
+    digest_hash = _digest_hash(result)
+
+    cached = _report_cache.get("original")
+    if not body.force and cached and cached["digest_hash"] == digest_hash:
+        return {
+            "report": cached["report"],
+            "generated_at": cached["generated_at"],
+            "from_cache": True,
+        }
+
+    try:
+        report = generate_recommendation_report(result)
+    except ReportUnavailable as e:
+        raise HTTPException(503, detail={"reason": e.reason, "message": e.message})
+
+    generated_at = datetime.now(timezone.utc).isoformat()
+    _report_cache["original"] = {
+        "report": report,
+        "generated_at": generated_at,
+        "digest_hash": digest_hash,
+    }
+    return {"report": report, "generated_at": generated_at, "from_cache": False}
+
+
+@router.get("/sample/report/export.xlsx")
+async def export_report_xlsx():
+    """Download the cached report as an Excel workbook. Never triggers LLM
+    generation itself — generate first via POST /sample/report/generate."""
+    cached = _report_cache.get("original")
+    if not cached:
+        raise HTTPException(404, "No report generated yet — generate one first")
+
+    result = _get_sample_comparison()
+    buf = build_excel_report(result, cached["report"])
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="D-111808_recommendation_report.xlsx"'},
+    )
+
+
+@router.get("/sample/report/export.html")
+async def export_report_html():
+    """Download the cached report as a standalone HTML document."""
+    cached = _report_cache.get("original")
+    if not cached:
+        raise HTTPException(404, "No report generated yet — generate one first")
+
+    result = _get_sample_comparison()
+    html_str = build_html_report(result, cached["report"])
+    return Response(
+        content=html_str,
+        media_type="text/html",
+        headers={"Content-Disposition": 'attachment; filename="D-111808_recommendation_report.html"'},
+    )

@@ -36,7 +36,7 @@ THIN_BORDER = Border(
 )
 
 
-def _header_row(ws, row: int, headers: list[str], widths: list[int]) -> None:
+def header_row(ws, row: int, headers: list[str], widths: list[int]) -> None:
     for col, (text, width) in enumerate(zip(headers, widths), start=1):
         cell = ws.cell(row=row, column=col, value=text)
         cell.fill = HEADER_FILL
@@ -80,7 +80,7 @@ def _write_recommendation_sheet(wb, result: ComparisonResult, report: dict) -> N
 
 def _write_bidder_notes_sheet(wb, report: dict) -> None:
     ws = wb.create_sheet("Bidder Notes")
-    _header_row(
+    header_row(
         ws, 1,
         ["Bidder", "Position", "Summary", "Negotiation Points", "Flags Highlighted"],
         [20, 16, 40, 50, 40],
@@ -107,7 +107,7 @@ def _write_bidder_notes_sheet(wb, report: dict) -> None:
 
 def _write_bid_summary_sheet(wb, result: ComparisonResult, report: dict) -> None:
     ws = wb.create_sheet("Bid Summary")
-    _header_row(ws, 1, ["Bidder", "Contract Total", "Rank"], [24, 20, 10])
+    header_row(ws, 1, ["Bidder", "Contract Total", "Rank"], [24, 20, 10])
 
     data_gap_bidders = set(report.get("bidder_notes", {})) & {
         b for b, n in report.get("bidder_notes", {}).items()
@@ -151,7 +151,7 @@ def _write_flags_sheet(wb, top_flags: dict[str, list[dict]]) -> None:
     unreadable sheet with no relationship to what the narrative above
     actually references. This keeps the export traceable to the report."""
     ws = wb.create_sheet("Flags")
-    _header_row(
+    header_row(
         ws, 1,
         ["Bidder", "Severity", "Category", "Lot", "Item No", "Description", "Detail"],
         [20, 10, 14, 16, 10, 40, 60],

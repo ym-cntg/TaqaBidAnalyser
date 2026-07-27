@@ -9,13 +9,14 @@ import dataclasses
 import hashlib
 import json
 import os
+import statistics
 from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Response
 from pydantic import BaseModel
 
-from ..extraction.excel_parser import BOQExtraction
+from ..extraction.excel_parser import BOQExtraction, parse_bidder_folder_all_rounds
 from ..extraction.router import parse_bidder_folder_pdf as parse_bidder_folder
 from ..analysis.comparator import ComparisonResult, compare_round, compute_peer_recommendations
 from ..analysis.corrections import (
@@ -25,11 +26,19 @@ from ..analysis.corrections import (
     list_corrections,
     record_correction,
 )
+from ..analysis.match_overrides import (
+    clear_match_override,
+    list_match_overrides,
+    record_match_override,
+)
+from ..analysis.rounds import build_round_trend
+from .projects import get_power_project_root
+from ..reporting.comparison_export import build_comparison_excel
 from ..reporting.digest import build_report_digest
 from ..reporting.excel_export import build_excel_report
 from ..reporting.html_export import build_html_report
 from ..reporting.llm_report import ReportUnavailable, generate_recommendation_report
-from .serializers import serialize_extraction, serialize_comparison
+from .serializers import serialize_extraction, serialize_comparison, serialize_round_trend
 
 router = APIRouter()
 
@@ -182,7 +191,7 @@ async def list_sample_bidders():
     excluded. The frontend surfaces it as needing manual entry instead of
     the bidder just disappearing without a trace.
     """
-    power_dir = DATA_DIR / "power"
+    power_dir = get_power_project_root()
     if not power_dir.exists():
         return []
 
@@ -206,7 +215,7 @@ async def list_sample_bidders():
 @router.get("/sample/extract/{bidder}")
 async def extract_sample_bidder(bidder: str):
     """Extract the original-round submission for a sample bidder."""
-    bidder_path = DATA_DIR / "power" / bidder
+    bidder_path = get_power_project_root() / bidder
     if not bidder_path.exists():
         raise HTTPException(404, f"Bidder '{bidder}' not found")
 
@@ -220,7 +229,7 @@ async def extract_sample_bidder(bidder: str):
 def _get_sample_comparison() -> ComparisonResult:
     """Shared by /sample/compare and /sample/report/* — every bidder's
     original-round submission, compared as one round."""
-    power_dir = DATA_DIR / "power"
+    power_dir = get_power_project_root()
     if not power_dir.exists():
         raise HTTPException(404, "No sample data found")
 
@@ -244,6 +253,146 @@ async def compare_sample_bidders():
     return serialize_comparison(_get_sample_comparison())
 
 
+class MatchOverrideRequest(BaseModel):
+    lot_number: int
+    bidder: str
+    original_item_no: str
+    canonical_item_no: str
+
+
+class MatchOverrideKey(BaseModel):
+    lot_number: int
+    bidder: str
+    original_item_no: str
+
+
+@router.get("/sample/compare/match-overrides")
+async def get_match_overrides():
+    """Every manual match-fix currently recorded, across all lots."""
+    return list_match_overrides()
+
+
+@router.post("/sample/compare/match-override")
+async def set_match_override(body: MatchOverrideRequest):
+    """Manually re-point a bidder's item to the correct canonical row — the
+    fail-safe for a 4-tier match (exact/normalized/fuzzy/LLM) that paired
+    the wrong two items, or left a real match as 'unmatched'. Returns the
+    comparison recomputed with the override applied, same as /correct does
+    for extraction fixes."""
+    record_match_override(body.lot_number, body.bidder, body.original_item_no, body.canonical_item_no)
+    return serialize_comparison(_get_sample_comparison())
+
+
+@router.post("/sample/compare/match-override/clear")
+async def clear_match_override_route(body: MatchOverrideKey):
+    """Discard a manual match fix and let automatic matching decide again."""
+    clear_match_override(body.lot_number, body.bidder, body.original_item_no)
+    return serialize_comparison(_get_sample_comparison())
+
+
+def _spread(values: list[float]) -> dict | None:
+    if not values:
+        return None
+    lo, hi = min(values), max(values)
+    med = statistics.median(values)
+    return {
+        "min": lo,
+        "max": hi,
+        "median": med,
+        "spread_pct": ((hi - lo) / med) if med else None,
+    }
+
+
+@router.get("/sample/insights")
+async def get_sample_insights():
+    """Headline numbers for the insights dashboard — bidder ranking, price
+    spread per lot, and flag counts by bidder/severity/category. Reuses the
+    same digest the LLM recommendation report is built from (see
+    reporting/digest.py) so the two views never disagree on the numbers."""
+    result = _get_sample_comparison()
+    digest = build_report_digest(result)
+
+    lot_spread = []
+    for lot in result.lots:
+        totals = [
+            t["total"] for b, t in lot.bidder_totals.items()
+            if b not in digest["data_gap_bidders"] and t.get("total") is not None
+        ]
+        lot_spread.append({
+            "lot_name": lot.lot_name,
+            "lot_number": lot.lot_number,
+            "spread": _spread(totals),
+        })
+
+    contract_totals = [t for t in digest["ranked_totals"] if t["rank"] is not None]
+    contract_spread = _spread([t["grand_total"] for t in contract_totals])
+
+    return {
+        "tender_no": result.tender_no,
+        "round_name": result.round_name,
+        "ranked_totals": digest["ranked_totals"],
+        "data_gap_bidders": digest["data_gap_bidders"],
+        "flag_counts": digest["flag_counts"],
+        "flag_summary": {
+            "critical": len([f for f in result.flags if f.severity == "critical"]),
+            "warning": len([f for f in result.flags if f.severity == "warning"]),
+            "info": len([f for f in result.flags if f.severity == "info"]),
+        },
+        "contract_spread": contract_spread,
+        "lot_spread": lot_spread,
+        "flags": [
+            {
+                "severity": f.severity, "category": f.category, "bidder": f.bidder,
+                "lot": f.lot, "item_no": f.item_no, "description": f.description, "detail": f.detail,
+            }
+            for f in result.flags
+        ],
+    }
+
+
+@router.get("/sample/comparison/export.xlsx")
+async def export_comparison_xlsx():
+    """Plain consolidated comparison workbook — no AI narrative, every
+    flag included. This is the artefact an analyst produces by hand today
+    (feature 17), distinct from the AI recommendation report."""
+    result = _get_sample_comparison()
+    buf = build_comparison_excel(result)
+    return Response(
+        content=buf.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="D-111808_comparison_report.xlsx"'},
+    )
+
+
+_round_trend_cache: dict[str, list] = {}
+
+
+@router.get("/sample/rounds")
+async def get_sample_round_trend():
+    """Round-over-round price movement across original/round1/round2/round3
+    for every bidder that has multi-round Excel data (features 14-15)."""
+    power_dir = get_power_project_root()
+    if not power_dir.exists():
+        raise HTTPException(404, "No sample data found")
+
+    bidder_round_extractions: dict[str, dict[str, BOQExtraction]] = {}
+    for bidder_dir in sorted(power_dir.iterdir()):
+        if not bidder_dir.is_dir():
+            continue
+        key = str(bidder_dir)
+        if key not in _round_trend_cache:
+            _round_trend_cache[key] = parse_bidder_folder_all_rounds(bidder_dir, bidder_dir.name)
+        extractions = _round_trend_cache[key]
+        if extractions:
+            bidder_round_extractions[bidder_dir.name] = {e.round_name: e for e in extractions}
+
+    if not bidder_round_extractions:
+        raise HTTPException(404, "No round data found")
+
+    trend = build_round_trend(bidder_round_extractions)
+    return serialize_round_trend(trend)
+
+
 @router.post("/sample/extract/{bidder}/correct")
 async def correct_item(bidder: str, body: ItemCorrectionRequest):
     """Override one or more fields on a single extracted item.
@@ -254,7 +403,7 @@ async def correct_item(bidder: str, body: ItemCorrectionRequest):
     picks up the corrected value on its next read — nothing needs to be
     re-extracted or re-run.
     """
-    bidder_path = DATA_DIR / "power" / bidder
+    bidder_path = get_power_project_root() / bidder
     if not bidder_path.exists():
         raise HTTPException(404, f"Bidder '{bidder}' not found")
 
@@ -278,7 +427,7 @@ async def correct_item(bidder: str, body: ItemCorrectionRequest):
 @router.post("/sample/extract/{bidder}/revert")
 async def revert_item(bidder: str, body: ItemCorrectionKey):
     """Discard a correction and restore the original extracted value."""
-    bidder_path = DATA_DIR / "power" / bidder
+    bidder_path = get_power_project_root() / bidder
     if not bidder_path.exists():
         raise HTTPException(404, f"Bidder '{bidder}' not found")
 
@@ -301,7 +450,7 @@ async def get_recommendations(bidder: str):
     (a skeleton has nothing real to offer as a peer value). Purely advisory:
     a reviewer can accept, adjust, or ignore these when correcting an item.
     """
-    power_dir = DATA_DIR / "power"
+    power_dir = get_power_project_root()
     if not power_dir.exists():
         raise HTTPException(404, "No sample data found")
 

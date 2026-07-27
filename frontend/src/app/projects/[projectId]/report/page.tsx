@@ -20,6 +20,8 @@ import {
   type ReportStatus,
   type RecommendationReport,
 } from "@/lib/api";
+import { useCurrentProject } from "@/lib/project-context";
+import { AnalysisNotAvailable } from "@/components/analysis-not-available";
 
 type ViewState = "idle" | "generating" | "loaded" | "error" | "not_configured";
 
@@ -45,6 +47,7 @@ function positionBadgeClass(position: string): string {
 }
 
 export default function ReportPage() {
+  const { project, loading: projectLoading } = useCurrentProject();
   const [status, setStatus] = useState<ReportStatus | null>(null);
   const [report, setReport] = useState<RecommendationReport | null>(null);
   const [generatedAt, setGeneratedAt] = useState<string | null>(null);
@@ -52,6 +55,7 @@ export default function ReportPage() {
   const [error, setError] = useState<{ reason: string; message: string } | null>(null);
 
   useEffect(() => {
+    if (!project?.analysis_ready) return;
     getReportStatus().then((s) => {
       setStatus(s);
       if (!s.llm_configured) {
@@ -62,7 +66,8 @@ export default function ReportPage() {
         runGenerate(false);
       }
     });
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.analysis_ready]);
 
   async function runGenerate(force: boolean) {
     setView("generating");
@@ -87,6 +92,9 @@ export default function ReportPage() {
       }
     }
   }
+
+  if (projectLoading) return null;
+  if (!project?.analysis_ready) return <AnalysisNotAvailable project={project} />;
 
   return (
     <div className="p-8 space-y-6">

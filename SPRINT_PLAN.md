@@ -194,8 +194,8 @@ but not built, so this doesn't stay implicit across `backend/analysis/`.
 | 4-tier item matching (exact → normalized → fuzzy → LLM) | Rules (tiers 1–3) + real LLM call, opt-in (tier 4) | Shipped — `backend/analysis/item_matcher.py` | — |
 | Flag detection: unquoted, arithmetic, outlier, unbalanced, cross-lot, missing | Rule/threshold-based (medians, ratios — no ML) | Shipped — `backend/analysis/comparator.py` | — |
 | Peer-median recommendations for data-gap manual entry | Rule-based (median) | Shipped — `backend/analysis/corrections.py` | Week 1 |
-| Round-over-round anomaly flags (jump >2x with no explanation) | Rule-based | Planned | Week 2 |
-| Description-change detection across bidders/rounds | Rule-based (text similarity) | Planned | Week 3 |
+| Round-over-round anomaly flags (item price increases, or steeper-than-peer discounts) | Rule-based | **Built**, branch `full-feature-buildout` — `backend/analysis/rounds.py`, see `PROGRESS.md` 2026-07-24 | Week 2 |
+| Description-change detection across bidders/rounds | Rule-based (text similarity, `difflib`) | **Built**, branch `full-feature-buildout` — `comparator.py::_detect_tampering_flags`, see `PROGRESS.md` 2026-07-24 | Week 3 |
 | **LLM recommendation report** — executive summary, award recommendation, per-bidder negotiation notes | Genuine LLM (Azure OpenAI, on-demand button) | **Built**, branch `ai-negotiation-features` — real API call not yet verified (no Azure OpenAI credentials in this environment yet) | Week 3 |
 | Vendor financial-standing / capacity risk narrative (per Business Case "final evaluation" step) | Would be LLM, but needs financial/capacity documents we don't currently ingest | Not started — blocked on data source, not effort | Backlog, no ETA |
 
@@ -246,13 +246,19 @@ treated as instructions.
 | Must | Manual correction fail-safe for OCR/extraction errors | Week 1 |
 | Must | Data-gap policy (manual add + peer recommendations) | Week 1 |
 | Should | Dashboard page rebuild | Week 2 |
-| Should | Flags & Insights page rebuild | Week 2 |
+| Should | Flags & Insights page rebuild | **Built**, branch `full-feature-buildout` — `/insights`, see `PROGRESS.md` 2026-07-24 |
 | Should | Cache extraction failures | Week 3 |
-| Should | Description-change detection | Week 3 |
-| Could | Persist upload results / item corrections / re-add Upload page | Week 3 |
+| Should | Description-change detection | **Built**, branch `full-feature-buildout` — see `PROGRESS.md` 2026-07-24 |
+| Should | Document selection landing page (tender-agnostic file curation) | **Built**, branch `ai-negotiation-features` — see below |
+| Should | Round-over-round tracking page + movement flags | **Built**, branch `full-feature-buildout` — `/rounds`, see `PROGRESS.md` 2026-07-24 |
+| Should | BOQ template builder (requisition → build → review/lock → issue) | **Built**, branch `full-feature-buildout` — `/template`, Maximo steps simulated, see `PROGRESS.md` 2026-07-24 |
+| Should | Close-out / historical record | **Built**, branch `full-feature-buildout` — `/closeout`, see `PROGRESS.md` 2026-07-24 |
+| Should | Plain downloadable comparison report (distinct from AI report) | **Built**, branch `full-feature-buildout` — see `PROGRESS.md` 2026-07-24 |
+| Could | Persist upload results / item corrections / re-add Upload page | Week 3 — selection persistence now covered by the landing page above; single-file upload+preview still not re-added |
+| Should | Projects (multi-tender workspace) + demo login gate + sectioned in-project navigation | **Built**, branch `full-feature-buildout` — see `PROGRESS.md` 2026-07-27. Login is a demo identity gate, not real auth (explicit scope decision); projects are a real persisted registry, creatable against any `data/` folder, but only the seeded D-111808 project has `analysis_ready: true` — see below |
 | Could | Azure deployment | Week 4 |
-| Won't (this cycle) | Water/other tender-type support | — |
-| Won't (this cycle) | Multi-tender support (currently hardcoded to D-111808) | — |
+| Won't (this cycle) | Water/other tender-type support | Confirmed concretely (not just assumed) against real `data/water/A-20669` sample data — see `PROGRESS.md` 2026-07-20. Different folder structure, different BOQ schema (no CIF/Erection split, different headers) — a parser rewrite, not a config change. The BOQ template builder correctly 404s for water rather than fabricating structure (`PROGRESS.md` 2026-07-24) |
+| Won't (this cycle) | Generic multi-tender *analysis* (any project's BOQ format working end-to-end) | Superseded in scope by the Projects system above for curation/workflow, but `comparator.py`/`extraction/`/`/api/sample/*` are still hardcoded to the D-111808 BOQ shape — a new project only gets document curation until a parser is built for its format, tracked via `analysis_ready` per project rather than assumed |
 
 ---
 

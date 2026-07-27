@@ -23,6 +23,8 @@ import {
   type EditableItemField,
   type Recommendation,
 } from "@/lib/api";
+import { useCurrentProject } from "@/lib/project-context";
+import { AnalysisNotAvailable } from "@/components/analysis-not-available";
 
 const EDITABLE_TEXT_FIELDS: EditableItemField[] = ["description", "unit"];
 const EDITABLE_NUMERIC_FIELDS: EditableItemField[] = [
@@ -61,6 +63,7 @@ function formatAED(val: number | null | undefined): string {
 }
 
 export default function ExplorerPage() {
+  const { project, loading: projectLoading } = useCurrentProject();
   const [bidders, setBidders] = useState<Bidder[]>([]);
   const [selectedBidder, setSelectedBidder] = useState("");
   const [currentExtraction, setCurrentExtraction] = useState<BOQExtraction | null>(null);
@@ -74,11 +77,13 @@ export default function ExplorerPage() {
   const [recommendations, setRecommendations] = useState<Record<string, Recommendation>>({});
 
   useEffect(() => {
+    if (!project?.analysis_ready) return;
     getBidders().then((b) => {
       setBidders(b);
       if (b.length > 0) setSelectedBidder(b[0].name);
     });
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [project?.analysis_ready]);
 
   useEffect(() => {
     if (!selectedBidder) return;
@@ -177,6 +182,9 @@ export default function ExplorerPage() {
 
   const currentLot = currentExtraction?.lots[selectedLot];
   const currentSheet = currentLot?.sheets[selectedSheet];
+
+  if (projectLoading) return null;
+  if (!project?.analysis_ready) return <AnalysisNotAvailable project={project} />;
 
   return (
     <div className="p-8 space-y-6">

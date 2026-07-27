@@ -1,9 +1,12 @@
 """Compare bidders and generate analysis insights."""
 
+import difflib
+import re
 import statistics
 from dataclasses import dataclass
 from ..extraction.excel_parser import BOQExtraction, BOQLot
 from .item_matcher import match_items
+from .match_overrides import get_overrides_for_lot
 
 
 @dataclass(frozen=True)
@@ -259,27 +262,127 @@ def _detect_cross_lot_flags(
     return flags
 
 
+TAMPERING_SIMILARITY_THRESHOLD = 0.75  # difflib ratio below this = flagged
+TAMPERING_MIN_PEER_AGREEMENT = 2  # need >=2 bidders agreeing on wording to call an outlier "tampered"
+
+
+def _normalize_description(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip().lower()
+
+
+def _detect_tampering_flags(
+    lot_names: dict[int, str],
+    bidder_lot_items: dict[int, dict[str, dict[str, dict]]],
+) -> list[Flag]:
+    """Flag a bidder's item description that reads materially differently
+    from what peer bidders submitted for the same item number.
+
+    The ADDC-standard BOQ template issues identical item wording to every
+    bidder — a description that drifts from what the majority submitted
+    can mean a bidder quietly narrowed/widened scope on that line without
+    renumbering it (the manual-process pain point this check targets).
+    A single dissenting bidder against 2+ peers who agree with each other
+    is treated as the odd one out; if there's no such peer consensus (e.g.
+    only 2 bidders and they disagree, or everyone's wording differs), we
+    can't tell who "tampered" from wording alone, so nothing is flagged.
+    """
+    flags: list[Flag] = []
+
+    for lot_num, items_by_bidder in bidder_lot_items.items():
+        # item_no -> bidder -> description
+        by_item: dict[str, dict[str, str]] = {}
+        for bidder_name, items in items_by_bidder.items():
+            for item_no, data in items.items():
+                desc = data.get("description") or ""
+                if desc.strip():
+                    by_item.setdefault(item_no, {})[bidder_name] = desc
+
+        for item_no, descriptions in by_item.items():
+            if len(descriptions) < 3:
+                continue  # need enough bidders to establish a consensus
+
+            normalized = {b: _normalize_description(d) for b, d in descriptions.items()}
+            counts: dict[str, int] = {}
+            for norm in normalized.values():
+                counts[norm] = counts.get(norm, 0) + 1
+            reference_norm, agreement = max(counts.items(), key=lambda kv: kv[1])
+            if agreement < TAMPERING_MIN_PEER_AGREEMENT:
+                continue  # no real consensus to compare outliers against
+
+            for bidder_name, norm in normalized.items():
+                if norm == reference_norm:
+                    continue
+                ratio = difflib.SequenceMatcher(None, reference_norm, norm).ratio()
+                if ratio < TAMPERING_SIMILARITY_THRESHOLD:
+                    flags.append(Flag(
+                        severity="warning",
+                        category="tampering",
+                        bidder=bidder_name,
+                        lot=lot_names.get(lot_num, f"Lot {lot_num}"),
+                        item_no=item_no,
+                        description=descriptions[bidder_name][:100],
+                        detail=(
+                            f"Description wording only {ratio:.0%} similar to what "
+                            f"{agreement} other bidder(s) submitted for this item — "
+                            f"possible scope change: \"{descriptions[bidder_name][:80]}\" "
+                            f"vs. template wording \"{reference_norm[:80]}\""
+                        ),
+                    ))
+
+    return flags
+
+
 def _sort_key(item_no: str) -> list[float]:
     """Sort item numbers numerically (e.g., 1.2.3 before 1.10.1)."""
     return [float(p) if p.replace(".", "").isdigit() else 0 for p in item_no.split(".")]
 
 
+def _apply_match_overrides(
+    lot_number: int,
+    bidder_items: dict[str, dict[str, dict]],
+    item_mapping: dict[str, dict[str, str]],
+    match_info: dict[str, tuple[str, float]],
+) -> None:
+    """Apply reviewer-recorded manual match fixes (see `match_overrides.py`)
+    on top of the automatic 4-tier match, mutating `item_mapping`/`match_info`
+    in place. A bidder's item can only live under one canonical row at a
+    time, so this first removes it from wherever the automatic match put
+    it, then re-inserts it under the reviewer's chosen canonical item."""
+    overrides = get_overrides_for_lot(lot_number)
+    for (bidder_name, orig_item_no), target_canonical in overrides.items():
+        if orig_item_no not in bidder_items.get(bidder_name, {}):
+            continue  # stale override referencing data that no longer exists
+
+        for bmap in item_mapping.values():
+            if bmap.get(bidder_name) == orig_item_no:
+                del bmap[bidder_name]
+                break
+
+        item_mapping[target_canonical] = item_mapping.get(target_canonical, {})
+        item_mapping[target_canonical][bidder_name] = orig_item_no
+        match_info[target_canonical] = ("manual", 1.0)
+
+    # Drop canonical rows left empty (an unmatched singleton whose only
+    # bidder was just reassigned elsewhere).
+    for canonical in [k for k, v in item_mapping.items() if not v]:
+        del item_mapping[canonical]
+        match_info.pop(canonical, None)
+
+
 def _match_bidders_for_lot(
     bidder_items: dict[str, dict[str, dict]],
-) -> tuple[list[ComparisonItem], dict[str, str]]:
-    """Match items across all bidders for a single lot using 4-tier matching.
+    lot_number: int,
+) -> list[ComparisonItem]:
+    """Match items across all bidders for a single lot using 4-tier matching,
+    then apply any manual reviewer overrides on top.
 
     For >2 bidders, we pick the first bidder as reference and match each
     other bidder against it. Items only in non-reference bidders are added
     as unmatched.
-
-    Returns:
-        (comparison_items, canonical_map) where canonical_map maps
-        bidder-specific item_no -> canonical item_no used in comparison.
     """
     bidder_names = list(bidder_items.keys())
     if not bidder_names:
-        return [], {}
+        return []
 
     reference_bidder = bidder_names[0]
     ref_items = bidder_items[reference_bidder]
@@ -315,6 +418,8 @@ def _match_bidders_for_lot(
             item_mapping[key_b] = {bidder_name: key_b}
             match_info[key_b] = ("unmatched", 0.0)
 
+    _apply_match_overrides(lot_number, bidder_items, item_mapping, match_info)
+
     # Build ComparisonItems
     comparison_items = []
     for canonical in sorted(item_mapping.keys(), key=_sort_key):
@@ -343,6 +448,7 @@ def _match_bidders_for_lot(
                     "total": d["total"],
                     "is_corrected": d.get("is_corrected", False),
                     "is_missing": d.get("is_missing", False),
+                    "original_item_no": orig_key,
                 }
             else:
                 prices[bidder_name] = {
@@ -351,6 +457,7 @@ def _match_bidders_for_lot(
                     "total": None,
                     "is_corrected": False,
                     "is_missing": False,
+                    "original_item_no": None,
                 }
 
         # Skip section headers: items where no bidder has any pricing
@@ -397,7 +504,7 @@ def compare_round(
         bidder_items = bidder_lot_items[lot_num]
 
         # Use 4-tier matching
-        comparison_items = _match_bidders_for_lot(bidder_items)
+        comparison_items = _match_bidders_for_lot(bidder_items, lot_num)
 
         # Lot-level totals and flags
         bidder_totals = {}
@@ -435,6 +542,7 @@ def compare_round(
     # once (to compare a bidder's swing against peers'), unlike the per-lot
     # loop above.
     all_flags.extend(_detect_cross_lot_flags(lot_names, bidder_lot_items))
+    all_flags.extend(_detect_tampering_flags(lot_names, bidder_lot_items))
 
     grand_totals = {}
     for bidder_name, extraction in extractions.items():

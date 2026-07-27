@@ -388,57 +388,76 @@ def parse_summary_file(filepath: str | Path) -> dict:
     return result
 
 
+ROUND_DIR_NAMES = ("original", "round1", "round2", "round3")
+
+
+def _parse_round_dir(round_dir: Path, bidder_name: str) -> BOQExtraction | None:
+    """Parse a single round directory's Excel files into a BOQExtraction."""
+    excel_dir = round_dir / "excel"
+    if not excel_dir.exists():
+        return None
+
+    round_name = round_dir.name
+    lots = []
+    total_contract_price = None
+
+    for xlsx_file in sorted(excel_dir.glob("*.xlsx")):
+        fname = xlsx_file.name.lower()
+        if "summary" in fname:
+            summary = parse_summary_file(xlsx_file)
+            total_contract_price = summary.get("total_contract_price")
+        elif "lot" in fname or "shbpry" in fname or "drpry" in fname or "smhpry" in fname:
+            lot = parse_lot_file(xlsx_file)
+            lots.append(lot)
+
+    if not lots:
+        return None
+
+    lots.sort(key=lambda l: l.lot_number)
+
+    # Some bidders don't submit a separate summary-of-all-lots file
+    # (e.g. only 3 per-lot files, no combined summary) — fall back to
+    # summing each lot's own total_price rather than leaving the
+    # contract total blank when we already have the real numbers.
+    if total_contract_price is None:
+        lot_totals = [l.total_price for l in lots if l.total_price is not None]
+        if lot_totals:
+            total_contract_price = sum(lot_totals)
+
+    return BOQExtraction(
+        tender_no="D-111808",
+        bidder=bidder_name,
+        round_name=round_name,
+        lots=tuple(lots),
+        total_contract_price=total_contract_price,
+    )
+
+
 def parse_bidder_folder(bidder_path: str | Path, bidder_name: str) -> list[BOQExtraction]:
     """Parse the original-round submission for a bidder (Excel fallback path).
 
     Original-bidding skeleton: negotiation rounds are intentionally not scanned.
     """
     bidder_path = Path(bidder_path)
-    extractions = []
-
     round_dirs = sorted(
         [d for d in bidder_path.iterdir() if d.is_dir() and d.name == "original"],
         key=lambda d: d.name,
     )
+    extractions = [_parse_round_dir(d, bidder_name) for d in round_dirs]
+    return [e for e in extractions if e is not None]
 
-    for round_dir in round_dirs:
-        excel_dir = round_dir / "excel"
-        if not excel_dir.exists():
-            continue
 
-        round_name = round_dir.name
-        lots = []
-        total_contract_price = None
-
-        for xlsx_file in sorted(excel_dir.glob("*.xlsx")):
-            fname = xlsx_file.name.lower()
-            if "summary" in fname:
-                summary = parse_summary_file(xlsx_file)
-                total_contract_price = summary.get("total_contract_price")
-            elif "lot" in fname or "shbpry" in fname or "drpry" in fname or "smhpry" in fname:
-                lot = parse_lot_file(xlsx_file)
-                lots.append(lot)
-
-        if lots:
-            lots.sort(key=lambda l: l.lot_number)
-
-            # Some bidders don't submit a separate summary-of-all-lots file
-            # (e.g. only 3 per-lot files, no combined summary) — fall back to
-            # summing each lot's own total_price rather than leaving the
-            # contract total blank when we already have the real numbers.
-            if total_contract_price is None:
-                lot_totals = [l.total_price for l in lots if l.total_price is not None]
-                if lot_totals:
-                    total_contract_price = sum(lot_totals)
-
-            extractions.append(
-                BOQExtraction(
-                    tender_no="D-111808",
-                    bidder=bidder_name,
-                    round_name=round_name,
-                    lots=tuple(lots),
-                    total_contract_price=total_contract_price,
-                )
-            )
-
-    return extractions
+def parse_bidder_folder_all_rounds(bidder_path: str | Path, bidder_name: str) -> list[BOQExtraction]:
+    """Parse every negotiation round (original, round1, round2, round3) found
+    for a bidder, via Excel — used for round-over-round price movement
+    tracking. Excel is the reliable source across rounds (openpyxl parses it
+    cleanly; the PDF path is only wired up for the original round). Rounds
+    with no usable Excel data for this bidder are simply omitted, not errored.
+    """
+    bidder_path = Path(bidder_path)
+    round_dirs = sorted(
+        [d for d in bidder_path.iterdir() if d.is_dir() and d.name in ROUND_DIR_NAMES],
+        key=lambda d: ROUND_DIR_NAMES.index(d.name),
+    )
+    extractions = [_parse_round_dir(d, bidder_name) for d in round_dirs]
+    return [e for e in extractions if e is not None]

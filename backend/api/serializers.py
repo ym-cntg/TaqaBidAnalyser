@@ -2,6 +2,7 @@
 
 from ..extraction.excel_parser import BOQExtraction, BOQItem, BOQLot, BOQSheet
 from ..analysis.comparator import ComparisonResult, ComparisonItem, LotComparison, Flag
+from ..analysis.rounds import BidderRoundTrend, RoundPoint, RoundTrendResult
 
 
 def serialize_item(item: BOQItem) -> dict:
@@ -88,6 +89,29 @@ def serialize_lot_comparison(lc: LotComparison) -> dict:
         "items": [serialize_comparison_item(i) for i in lc.items],
         "bidder_totals": lc.bidder_totals,
         "item_count": len(lc.items),
+    }
+
+
+def serialize_round_point(point: RoundPoint) -> dict:
+    return {
+        "round_name": point.round_name,
+        "total_contract_price": point.total_contract_price,
+        "lot_totals": point.lot_totals,
+    }
+
+
+def serialize_bidder_round_trend(trend: BidderRoundTrend) -> dict:
+    return {
+        "bidder": trend.bidder,
+        "points": [serialize_round_point(p) for p in trend.points],
+    }
+
+
+def serialize_round_trend(result: RoundTrendResult) -> dict:
+    return {
+        "rounds_present": list(result.rounds_present),
+        "bidders": [serialize_bidder_round_trend(b) for b in result.bidders],
+        "flags": [serialize_flag(f) for f in result.flags],
     }
 
 

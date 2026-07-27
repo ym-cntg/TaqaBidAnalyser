@@ -21,3 +21,5 @@ temp/
 utilities/output
 output/
 .cache/
+backend/state/
+scratch/

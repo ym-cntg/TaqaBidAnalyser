@@ -10,6 +10,292 @@ narrates the story, that file is the reference table.
 
 ---
 
+## 2026-07-27 — Projects + login + sectioned navigation restructure
+
+Restructured the whole app around a new top-level concept: **Projects**.
+Previously every page implicitly worked on a single hardcoded tender
+(power/D-111808); now there's a login gate, a Projects picker, and each
+project opens into the same 4-section workflow (Template Builder → Bid
+Finalisation → Bid Analysis → Close-out) scoped to that project's data.
+
+**Login is a demo gate, not real auth** (explicit user decision — a real
+user/session/password system was judged out of scope for a workflow demo).
+`frontend/src/lib/auth.ts` stores `{name, email}` in `localStorage`;
+`frontend/src/components/auth-gate.tsx` redirects to `/login` if it's
+missing. The backend trusts every request regardless — there is no
+server-side session or auth check anywhere. `created_by` on a new project
+and the template-lock name are both prefilled from this identity, but nothing
+enforces it.
+
+**Projects are real** (explicit user decision — not just the two hardcoded
+tenders relabeled): `backend/api/projects.py` (new) is a persisted registry
+(`backend/state/projects.json`) supporting create/list/get/delete, seeded on
+first run with the two existing tenders. Creating a project points it at
+any folder under `data/` — `GET /projects/discoverable-roots` scans for
+unclaimed folders that look like a bidder collection (a dir whose children
+are themselves dirs with real files directly inside), or a path can be typed
+manually. Path-traversal guarded the same way `documents.py`'s file
+selection already was (resolve + containment check).
+
+**"Analysis ready" is honest, not inferred.** Only the seeded D-111808
+project has `analysis_ready: true`. The extraction/comparison pipeline
+(`routes.py`'s `/sample/*` endpoints) is still internally hardcoded to that
+one BOQ template's shape — `projects.get_power_project_root()` is a thin
+resolution layer so that hardcoding at least follows the registry (survives
+a rename) rather than a bare path literal, it does **not** make analysis
+generic. Every other project — water, and anything created here — gets
+document curation only, with the same honest "not wired up yet" treatment
+water already had (see 2026-07-20 entry), now generalized: the sidebar
+greys out and locks Template Builder / BOQ Explorer / all of Bid Analysis /
+Close-out for any non-ready project, and each of those pages independently
+re-checks `project.analysis_ready` before rendering — not just the sidebar
+— so directly typing the URL for a locked page shows the same "not
+available" state instead of leaking the power project's data under the
+wrong project's name. Verified this both via the sidebar (grey/locked nav
+items) and by navigating directly to `/projects/water-a20669/template`.
+
+**Renamed for the new concept**: `backend/api/tenders.py` → `documents.py`
+(same file-curation logic, now takes `project_id` resolved through
+`projects.py` instead of a hardcoded 2-entry dict); `TENDER_ROOTS` /
+`_SIMULATED_REQUISITIONS` in `workflow.py` → resolved via the project
+registry, with a `_generic_requisition()` fallback (built from the
+project's own name/description) for any project without a hand-authored
+canned requisition, so a newly-created project's Template Builder still
+works end-to-end instead of 404ing on `pull-requisition`.
+
+**Frontend restructure**: every in-project page moved under
+`frontend/src/app/projects/[projectId]/...` (`git mv` for the three
+already-committed pages — compare, explorer, report — to preserve history;
+plain move for the rest). New `projects/[projectId]/layout.tsx` provides a
+`ProjectProvider` (fetches project detail once, shared via context so
+7+ pages don't each re-fetch it) and the new sectioned `Sidebar` — replacing
+the old flat 8-item list with 4 titled groups matching the feature list's
+structure exactly. New `frontend/src/app/projects/page.tsx` (project
+list/create/delete, no project-scoped sidebar since none is selected yet)
+and `frontend/src/app/login/page.tsx`. Root `frontend/src/app/page.tsx` is
+now just a redirect (`/projects` if logged in, else `/login`).
+
+Where "Select Documents" belongs wasn't explicit in the section list the
+user gave (only "BOQ Explorer" was named under Bid Finalisation) — placed
+it as the first item in that section since document curation logically
+precedes exploring the extracted BOQ, and it's the one thing that works
+for every project regardless of `analysis_ready`.
+
+**Verification**: `npx tsc --noEmit` clean; backend imports clean; regression
+check passes (7 bidders, 21 lots, 8,892 flags); full Playwright walkthrough —
+login → projects list → open D-111808 → all 8 in-project routes render
+their correct heading with zero console errors → open A-20669 (water) →
+locked sections show grey/lock state in the sidebar and the shared
+"not available" screen on direct navigation. Backend-verified separately:
+project create/list/delete, discoverable-roots (including catching and
+fixing two false positives — `data/Template Structure/` matched because its
+only "files" were `.DS_Store`, and `power`'s own bidder subfolders matched
+because the original recursive check couldn't distinguish "a root
+containing bidder folders" from "a bidder folder containing round
+folders" — fixed by requiring the match to be exactly one level of
+nesting, not unbounded `rglob`), and the full requisition→build→lock→
+issue→close lifecycle against the new project ids.
+
+---
+
+## 2026-07-24 — Full feature-list buildout, branch `full-feature-buildout`
+
+Built out every remaining row of the 19-item TAQA feature list (the
+"Modules / Feature / What it does" table shared for this cycle) end-to-end,
+on a new branch off `ai-negotiation-features`. Several rows were already
+shipped (item matching, flag detection, parsing review/correction, side-by-
+side comparison, cross-lot consistency, LLM recommendation report, document
+selection landing page) — this entry covers what's new.
+
+**Maximo-dependent steps are explicitly simulated, not real.** This repo
+has no Maximo credentials or sandbox. Every simulated response is labeled
+`"simulated": true` in its API payload and carries a "Simulated" badge in
+the UI, so nothing pretends to be a real integration:
+- `backend/api/workflow.py` (new router, mounted at `/api/workflow`) — a
+  persisted-JSON state machine (`backend/state/workflow.json`, same gitignored
+  pattern as the tender-selection store) per tender: `not_started` →
+  `requisition_pulled` → `template_built` → `template_locked` → `issued` →
+  `closed`.
+- **Pull requisition** (feature 1) — canned Maximo PR payload (PR number,
+  requester, high-level work categories). Simulated.
+- **Build BOQ template** (feature 2) — genuinely real: derives the template
+  (item_no/description/unit/qty, pricing stripped) from the first bidder
+  folder that actually parses via the existing PDF/Excel extraction path.
+  For water this correctly 404s ("extraction for this tender type isn't
+  wired up") rather than fabricating structure — consistent with the
+  2026-07-20 finding that water's BOQ schema isn't parseable yet.
+- **Review, edit, lock** (feature 3) — template rows are editable in-place
+  while `template_built`; `POST .../template/lock` requires a `locked_by`
+  name and freezes edits (409 if attempted while locked); added an
+  `unlock` action (not in the original feature list, but without it a
+  reviewer who locked early has no way back in a demo session).
+- **Issue for market request** (feature 4) — simulated Maximo reference
+  number generated and stored; requires `template_locked`.
+- **Close-out** (feature 19) — `POST /api/workflow/{tender}/close` stores
+  the award decision (primary award, shortlist, reasoning, notes) as a
+  historical record once `issued`. The close-out page prefills the form
+  from the cached AI recommendation report when one exists (read-only
+  cache check via `getReportStatus()` — never triggers a fresh paid LLM
+  call itself).
+- `frontend/src/app/template/page.tsx`, `frontend/src/app/closeout/page.tsx`
+  — new pages for the above.
+
+**Round-over-round price movement (features 14-15).** The Excel parser
+was previously hardcoded to the `original` round only (`excel_parser.py`'s
+`parse_bidder_folder`), mirroring the PDF path's deliberate original-only
+scoping. Added `parse_bidder_folder_all_rounds()` alongside it (shared
+`_parse_round_dir()` helper, existing function untouched) that reads every
+`original`/`round1`/`round2`/`round3` folder present — verified all 7
+bidders actually have multi-round Excel data on disk, contrary to
+`CLAUDE.md`'s stale note that only AGPOWER/AL Geemi do.
+- `backend/analysis/rounds.py` (new) — `build_round_trend()` returns each
+  bidder's contract/lot total per round, plus two flag rules: (1) any
+  item whose price *increases* round-over-round (critical — negotiations
+  shouldn't raise prices), (2) an item discounted far more steeply than
+  peer bidders discounted the same item, via the same
+  normalize-to-own-median-then-compare-to-peer-median trick as the existing
+  cross-lot check. New `Flag.category = "round_movement"`.
+- `GET /api/sample/rounds`, `frontend/src/app/rounds/page.tsx` (line chart
+  + totals table + filterable movement-flag list).
+- Found 1,481 movement flags on the sample data — mostly item-level
+  increases even where a bidder's *contract total* dropped, meaning
+  bidders are restructuring rates between items across rounds while the
+  total falls. Left un-curated (unlike the LLM digest's top-6) since this
+  is a browse view, not something fed to an LLM.
+
+**Description tampering check (feature 13).** Added
+`_detect_tampering_flags()` to `backend/analysis/comparator.py` (same
+per-lot item-map data `_detect_cross_lot_flags` already builds). For each
+item_no with 3+ bidders' descriptions, takes the majority-agreed wording as
+reference (needs ≥2 bidders agreeing — a 50/50 split can't tell you who
+tampered) and flags any bidder whose wording similarity
+(`difflib.SequenceMatcher`) drops below 75%. New `Flag.category =
+"tampering"`. Found 18 real flags on sample data (e.g. Ray appending
+"(Not Applicable)" to several descriptions).
+
+**Insights dashboard (feature 16).** `GET /api/sample/insights` reuses
+`build_report_digest()` (the same digest the LLM report is built from, so
+the two views can't disagree) plus a per-lot min/median/max/spread calc.
+`frontend/src/app/insights/page.tsx` — headline cards, a recharts bar
+chart ranking bidders (lowest highlighted, data-gap bidders greyed), a lot
+spread table, and a filterable/searchable browser over *all* flags
+(severity/category/bidder + text search, capped at 300 rendered rows with
+a "narrow your filters" hint — the full flag set is ~8,900 objects, too
+many to mount as DOM rows at once).
+
+**Plain downloadable comparison report (feature 17).** Distinct from the
+AI recommendation report — `backend/reporting/comparison_export.py` builds
+a "Bid Summary" + one sheet per lot + an **uncurated** "Flags" sheet (every
+flag, not the LLM digest's top-6 — a raw audit export should show
+everything). Reused `excel_export.py`'s style constants directly
+(same-package sibling, not the cross-package "frozen reference" situation
+that made `excel_export.py` copy constants by value instead) — renamed its
+private `_header_row` to `header_row` since it's now shared across two
+modules. `GET /api/sample/comparison/export.xlsx`; download buttons added
+to both the Insights and Compare pages.
+
+**Verification**: `npx tsc --noEmit` clean; `backend.regression_check`
+passes (7 bidders, 21 lots, 8,892 flags); Playwright walkthrough of all 8
+routes (`/`, `/template`, `/explorer`, `/compare`, `/insights`, `/rounds`,
+`/report`, `/closeout`) — zero console errors, correct per-page `<h1>`;
+drove the full BOQ Template Builder lifecycle live (pull → build → expand
+lot → lock → issue) and the full close-out flow (issue → prefill-or-manual
+award entry → close → historical record display) via API calls and UI
+interaction, screenshotted at each stage. One real bug caught and fixed
+during this: template table rows used `row.item_no` as the React key,
+which isn't unique within a sheet (some BOQ sheets have duplicate item
+numbers) — switched to a composite `${sheet.name}-${item_no}-${index}` key.
+Workflow state reset to `not_started` for both tenders before handing off,
+so the demo starts clean.
+
+---
+
+## 2026-07-20 — Document selection landing page, tender-agnostic file curation
+
+Prompted by checking whether the newly-added `data/water/A-20669/` sample
+data "just works" with the existing pipeline (it doesn't — see the prior
+entry below). That investigation surfaced the real underlying problem this
+page solves: real bidder folders (especially water's) mix cover letters,
+compliance certificates, discount letters, and several near-duplicate BOQ
+exports together with no reliable naming convention — the pipeline can't
+know which file is actually "the bid" without a human saying so.
+
+- **`backend/api/tenders.py`** (new router, mounted in `main.py` alongside
+  the existing one): a small, deliberately tender-agnostic file-curation
+  API — `GET /api/tenders` (known tenders + bidder/file/selected counts),
+  `GET /api/tenders/{id}/files` (every file under every bidder folder,
+  recursive — handles power's `original/excel|pdf/` nesting and water's
+  flat layout with the same code), `POST /api/tenders/{id}/selection`
+  (toggle one file in/out of "the bid" for one bidder). Selections persist
+  to `backend/state/selections.json` (gitignored) rather than staying
+  in-memory — a curation decision felt worth keeping across restarts,
+  unlike the extraction cache. Guards against path traversal on the
+  incoming file path (resolves and checks it's actually inside the
+  bidder's own directory before accepting it).
+- **Two known tenders are hardcoded** (`power` → `data/power`, no
+  tender-number folder level; `water` → `data/water/A-20669`, which does
+  have one) rather than auto-discovered — there's exactly one example of
+  each folder shape right now, and guessing a general discovery rule from
+  a sample size of one would be over-engineering.
+- **This is curation only, not new extraction.** It lists and tags files;
+  it doesn't parse them. Power's existing comparison pipeline doesn't read
+  these selections at all yet (it still uses its own folder-convention
+  discovery), and water has no working BOQ parser regardless of what gets
+  selected — wiring selections into actual extraction is separate future
+  work, called out explicitly in the module docstring and in the new
+  page's UI (amber banner on the water tab).
+- **Frontend restructure**: this became the new landing page at `/`
+  (`frontend/src/app/page.tsx`), which moved the former Compare page to
+  `/compare` (`git mv`, preserves history) — sidebar updated to 4 items:
+  Select Documents, Bid Comparison, BOQ Explorer, Recommendation Report.
+  Per-bidder cards with checkboxes (optimistic UI, reverts on a failed
+  save), file icons by extension, human-readable sizes, and a tender
+  switcher showing `selected/total` counts per tender.
+- Verified: typecheck clean; all 4 routes (`/`, `/compare`, `/explorer`,
+  `/report`) return 200 and render their own content after the move;
+  backend endpoints tested directly (list, toggle, persistence-across-
+  requests, and the path-traversal guard rejecting `../../../etc/passwd`
+  with a 404 rather than accepting it); `backend.regression_check` still
+  passes (8 bidders, no change to the comparison pipeline itself);
+  Playwright screenshots of both tenders confirm the messy real file lists
+  (power: ~165 files across 8 bidders once round1/2/3 documents are
+  included via the recursive listing; water: ~26 files across 5 bidders,
+  several near-duplicate BOQ exports per bidder) render and toggle
+  correctly.
+
+---
+
+## 2026-07-20 — Checked whether the new `data/water/` sample data works with the existing pipeline
+
+Asked directly: it doesn't, and not as a bug — this is expected given
+scope decisions already on record.
+
+- **Nothing currently reads `data/water/`.** `DATA_DIR / "power"` is
+  hardcoded in `routes.py`, and `tender_no="D-111808"` is hardcoded in
+  three backend files (`comparator.py`, `extraction/router.py`,
+  `extraction/excel_parser.py`).
+- **Folder structure doesn't match.** The parser requires
+  `{bidder}/original/excel/` and `{bidder}/original/pdf/` subfolders.
+  Water's bidder folders have files sitting directly inside with no
+  round/type subfolders, several near-duplicate filenames, and mixed
+  document types (compliance certs, cover letters, one `.zip`).
+  Confirmed empirically: `parse_bidder_folder` returns `0` extractions for
+  a water bidder — fails the very first structural check.
+- **Even past that, the BOQ schema differs.** Power's template has a
+  two-part CIF + Erection pricing split with fixed columns; water's BOQ
+  (checked one bidder's Excel) uses a single `Unit Rate`/`Total` column,
+  headers labeled `Sl.No` instead of `Item`, and `Bill No.` sections named
+  after sites (AL DHAHER, Nahel, AL SAAD, SWEIHAN) instead of `Lot 1/2/3`.
+  The header-detection logic specifically searches for the literal word
+  `"Item"` — water's sheets don't have that, so parsing would silently
+  return nothing even with the folder structure fixed.
+- Matches `SPRINT_PLAN.md`'s existing "Won't (this cycle) — Water/other
+  tender-type support" line — not a new finding, just confirmed concretely
+  against real data instead of staying theoretical. Directly motivated the
+  document-selection landing page above (see next entry up).
+
+---
+
 ## 2026-07-08 — LLM recommendation report, on branch `ai-negotiation-features`
 
 Built the LLM recommendation report designed in the previous session's

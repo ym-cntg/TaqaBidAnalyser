@@ -38,8 +38,14 @@ outside Databricks), that's a deliberate follow-up, not a default.
 | `04_altquotationline.ipynb` | `altquotationline` — alternate/optional lines |
 | `05_documents.ipynb` | `docinfo`, `doclinks`, `vw_rfqvendor_documents` — attached documents |
 | `06_cross_table_relationships.ipynb` | Joins across tables + a summary checklist to fill in once 01-05 are done |
+| `07_trace_bid_with_boq.ipynb` | Traces one real `DETAILBOQAVAILABLE = 'Y'` tender end-to-end across every table |
+| `08_trace_bid_without_boq.ipynb` | Traces D-111808 (established "no itemized BOQ" example) and a `null`-flagged tender end-to-end, for comparison against `07` |
 
-Each notebook (except 06) follows the same shape: what the table is
-expected to represent, `DESCRIBE TABLE`, a row count, a 20-row sample, and
-an "Observations" cell to fill in once you've actually looked at it — that
-write-up is the real deliverable, not the raw query output.
+Notebooks 01-05 follow the same shape: what the table is expected to
+represent, `DESCRIBE TABLE`, a row count, a 20-row sample, and an
+"Observations" cell to fill in once you've actually looked at it — that
+write-up is the real deliverable, not the raw query output. 06 is
+cross-table joins instead. 07/08 are single-bid end-to-end traces (see
+below) — they use a Databricks widget (`dbutils.widgets.text(...)`) so you
+can paste in a real `RFQNUM` from a candidates query and re-run the rest of
+the notebook against it.

@@ -4,3 +4,5 @@ databricks/notebooks/03_quotationline.ipynb
 databricks/notebooks/04_altquotationline.ipynb
 databricks/notebooks/05_documents.ipynb
 databricks/notebooks/06_cross_table_relationships.ipynb
+databricks/notebooks/07_trace_bid_with_boq.ipynb
+databricks/notebooks/08_trace_bid_without_boq.ipynb

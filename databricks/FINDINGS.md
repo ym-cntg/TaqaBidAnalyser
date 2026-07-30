@@ -61,30 +61,104 @@ go — treat anything marked "pending" as not yet confirmed.
 
 ## `rfqvendor` — one row per bidder submission
 
-_Pending — notebook not yet run/shared._
+**Row count:** 412,896 (~13.6 invited-vendor rows per RFQ on average — this
+is invitees, not just actual submitters)
+
+**Schema (relevant columns):**
+
+| Column | Type | Notes |
+|---|---|---|
+| `RFQNUM` | varchar(20) | FK back to `rfq.RFQNUM` |
+| `VENDOR` | varchar(44) | **A vendor code (`001052`), not a company name.** No vendor/company master table exists among our current 7 tables/views — need to find one to resolve codes to names like "AGPOWER". |
+| `CONTACT`, `PHONE`, `FAXPHONE`, `EMAIL` | various | A real contact person at the vendor, plus their details |
+| `RFQVENDORID` | decimal(38,10) | This table's PK (one row per invited vendor per RFQ) |
+| `BIDSTATUS` / `BIDSTATUSDATE` | varchar(25) / timestamp | Vendor's bid status — distribution pending |
+| `SCORE` | decimal(16,2) | A per-vendor evaluation score |
+| `TOTALAWARDCOST`, `TOTALDISCOUNT`, `TOTBIDCOSTWDIS`, `TOTBIDCOSTWODIS`, `TOTALAWARDCOSTWITHTAX`, `BASETOTALAWARDCOST`, `TOTAWDWODISCOUNT` | **binary** | ⚠️ Typed `binary`, not decimal, and every sample row shows the *identical* value (`CGTqea+foUw=`) across all 7 columns — looks encrypted/masked, not just unpopulated. Potential blocker for reading award/discount totals directly. |
+| `TOTALAWARDCOSTWDIS`, `TOTALAWARDCOSTWITHTAXWDIS` | decimal(16,2) | Proper decimal equivalents exist alongside the binary ones — null in the (2003-era) sample, pending check on recent rows |
+| `POSTBID_DISCOUNT_COUNTER`, `POSTBID_DISCOUNT_SENT`, `DISCOUNT_REVISION`, `DISCOUNT_SUBMISSION_DATE`, `DISCOUNT_APPLY_DATE`, `DISCOUNTSTATUS`, `DISCOUNT_APPLIED_AFTERBIDS/AFTERPI/BEFOREBIDS` | various | A rich post-bid-discount mechanism at the vendor level — same `DISCOUNT_REVISION` column as `rfq`, reinforcing (but not yet confirming) the negotiation-round theory |
+
+**Key structural findings:**
+
+1. **Vendor names aren't in this dataset at all** — `VENDOR` is a bare code.
+   Resolving to real company names needs another table we haven't been given
+   access to yet (a Maximo `COMPANIES`/vendor-master table almost certainly
+   exists in the source system).
+2. **Sample `RFQNUM` values carry a `-R1` suffix** (`D1752-R1`) — this raises
+   a real possibility that **negotiation rounds are separate RFQ records**
+   (a new RFQNUM per round) rather than the `DISCOUNT_REVISION` counter
+   theorized from `rfq` alone. These might be two different concepts: a
+   formal re-tender (new RFQNUM) vs. a lighter post-bid discount loop
+   (`DISCOUNT_REVISION`/`POSTBID_DISCOUNT_COUNTER`) within one RFQ. **Needs
+   clarifying with TAQA — this materially affects how "round" should be
+   modeled if this data ever backs the app.**
+3. **Several money columns are `binary`-typed and appear masked/encrypted**
+   in the sample — if this holds on real recent tenders, reading actual
+   award/discount amounts may require a different path (a decrypted view,
+   an API, or the `WDIS` decimal columns instead).
 
 ## `quotationline` — priced BOQ line items
 
-_Pending — notebook not yet run/shared. This is the highest-priority table_
-_once schema comes in: it should show whether CIF/Erection map cleanly, how_
-_lots are distinguished (if `rfq` truly has none), and whether item numbering_
-_matches the ADDC-standard template the sample data assumes._
+**Schema (relevant columns):**
+
+| Column | Type | Notes |
+|---|---|---|
+| `RFQNUM`, `VENDOR` | varchar | Together, this is how a line joins back to `rfqvendor` — see correction below |
+| `RFQLINENUM` | decimal(38,10) | A plain sequential line counter (1, 2, 3… up to 557+ seen) — **not** the hierarchical BOQ number |
+| `QUOTATIONLINEID` | decimal(38,10) | This table's PK |
+| `BOQITEMNUM` | varchar(15) | **Likely the real hierarchical item number** (the `1.2.3`-style numbering the sample data uses) — null in our sample rows (those happened to be simple catalog/material RFQs), pending a populated example |
+| `ORDERQTY` / `ORDERUNIT` | decimal / varchar | Quantity and unit |
+| `UNITCOST` / `LINECOST` | decimal(18,4) | Rate and line total — confirmed `LINECOST = ORDERQTY × UNITCOST` in the sample |
+| `LINETYPE` | varchar(15) | Values seen: `MATERIAL`, `SERVICE`, `ITEM` — **leading theory: this is how CIF (supply) vs. Erection (install) is split**, as two rows sharing a `BOQITEMNUM` rather than two columns on one row. Unconfirmed. |
+| `ISAWARDED` | decimal(38,10) | **Confirmed real and granular**: for tender `D19885308`, 3 vendors quoted the same items and only one vendor's specific lines show `ISAWARDED=1` — award decisions are tracked per line, per vendor, not just one winner per RFQ |
+| `AWARDCOST` | decimal(14,4) | Populated the same as `LINECOST` regardless of `ISAWARDED` in the sample — looks like a default/suggested cost, not a live award-only value |
+| `DISCOUNT_PERCENT`, `DISCOUNT_UNITCOST`, `DISCOUNT_APPLIED_AFTERBIDS`, `LINECOSTWDIS` | various | Discount/negotiation mechanics exist at the **line-item level** too — directly relevant to round-over-round price movement |
+| `TAX1CODE`…`TAX5` | various | Up to 5 tax code/amount pairs per line |
+| `QL1`-`QL5`, `QL_EXTRA1` | various | Custom extension fields — one showed values `QUOTED`/`TNA` (possibly a technical-acceptance status?), needs confirming which field this actually is |
+
+**Key structural findings:**
+
+1. **No separate CIF/Erection columns.** Only one `UNITCOST`/`LINECOST` pair
+   per row. If `LINETYPE` (`MATERIAL` vs `SERVICE`) turns out to split CIF vs.
+   Erection as two rows per `BOQITEMNUM`, that's a clean mapping — pending
+   the follow-up query in `03_quotationline.ipynb`.
+2. **Correction to the previous entry in this file:** I previously wrote that
+   `quotationline.RFQVENDOR_ID` was "confirmed" to exist, based on a query in
+   `06_cross_table_relationships.ipynb` being left uncommented after you
+   edited it. That was a bad inference on my part — cell outputs are
+   stripped when Databricks commits back to git, so I had no way to actually
+   confirm that query succeeded rather than errored, and I shouldn't have
+   implied otherwise. **The real schema of `quotationline` has no
+   `RFQVENDORID`/`RFQVENDOR_ID` column at all.** The join back to
+   `rfqvendor` is the **composite key `(RFQNUM, VENDOR)`**, which both
+   tables have.
+3. Sample data includes RFQs with 500+ sequential `RFQLINENUM`s — consistent
+   with real large BOQs (~218 rows/lot in the sample data).
+4. A third org, `TRANS`/`TRANSORG`, appears — reinforces that this dataset
+   spans the whole legacy group, not just ADDC.
+
+**Follow-ups added to `02_rfqvendor.ipynb` and `03_quotationline.ipynb`**
+(need results): round-suffix distribution on `RFQNUM`, `BIDSTATUS`
+distribution, `DISCOUNT_REVISION`/`POSTBID_DISCOUNT_COUNTER` distribution,
+whether the `WDIS` decimal award columns populate on recent rows, a
+populated `BOQITEMNUM` example, `LINETYPE` distribution and whether it pairs
+up per `BOQITEMNUM`, which RFQs have 100+ lines (real BOQs), and a direct
+search for `D-111808`.
 
 ## `altquotationline` — alternate/optional lines
 
-_Pending — notebook not yet run/shared._
+_Pending — notebook not yet shared._
 
 ## `docinfo` / `doclinks` / `vw_rfqvendor_documents` — attached documents
 
-_Pending — notebook not yet run/shared._
+_Pending — notebook not yet shared._
 
 ## Cross-table relationships
 
-_Pending — needs `rfqvendor`/`quotationline` schemas confirmed first. One_
-_data point already in hand: `quotationline.RFQVENDOR_ID` exists as a real_
-_column (confirmed by running the query in `06_cross_table_relationships.ipynb`_
-_rather than just guessing it) — the FK from `quotationline` back to_
-_`rfqvendor` is `RFQVENDOR_ID`._
+_Pending — the join key question this section originally flagged is now_
+_resolved (see the correction under `quotationline` above): `(RFQNUM, VENDOR)`,_
+_not a single FK id. `06_cross_table_relationships.ipynb`'s queries need_
+_updating to match once `altquotationline`/`docinfo` findings are in too._
 
 ---
 
@@ -92,9 +166,21 @@ _`rfqvendor` is `RFQVENDOR_ID`._
 
 - Confirm whether `DETAILBOQAVAILABLE` is really the data-gap signal, and
   what a reviewer is supposed to do when it's `N`.
-- Confirm whether `DISCOUNT_REVISION` is the negotiation-round counter, and
-  whether it's per-RFQ or per-vendor.
-- Confirm how lots are modeled — separate RFQs, or something in
-  `quotationline` — since `rfq` itself has no lot column.
+- Confirm whether `DISCOUNT_REVISION`/`POSTBID_DISCOUNT_COUNTER` is the
+  negotiation-round counter, **or** whether a round is actually a distinct
+  RFQ record (the `-R1`-suffix pattern seen on some `RFQNUM`s in
+  `rfqvendor`) — these may be two different things (formal re-tender vs.
+  post-bid discount loop).
+- Confirm how lots are modeled — `rfq` has no lot column, and
+  `quotationline`'s `BOQITEMNUM` is null on the sample rows we've seen so
+  far (all non-BOQ catalog RFQs).
+- Confirm whether `LINETYPE` (`MATERIAL`/`SERVICE`) is really the CIF/
+  Erection split.
 - Confirm the current/active `ORGID` value(s) to filter to ADDC-relevant
-  records only (this table appears to span the whole ADWEA group).
+  records only (this table appears to span the whole ADWEA group, plus at
+  least one more entity, `TRANS`).
+- Find/get access to a vendor/company master table — `rfqvendor.VENDOR` is
+  a bare code with no name attached anywhere in our current 7 tables.
+- Confirm whether the `binary`-typed award/discount-cost columns in
+  `rfqvendor` are genuinely encrypted, and if so, what the supported way to
+  read real values is (the `WDIS` decimal columns, a view, an API, etc).

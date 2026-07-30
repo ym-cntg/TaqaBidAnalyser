@@ -147,7 +147,31 @@ search for `D-111808`.
 
 ## `altquotationline` — alternate/optional lines
 
-_Pending — notebook not yet shared._
+**Schema:** near-identical to `quotationline` (same `RFQNUM`/`RFQLINENUM`/
+`VENDOR`/`ITEMNUM`/`UNITCOST`/`LINECOST`/`LINETYPE`/`BOQITEMNUM`/`ISAWARDED`/
+tax/discount columns), plus:
+
+| Column | Type | Notes |
+|---|---|---|
+| `ALTQUOTATIONLINEID` | decimal(38,10) | This table's PK |
+| `ALTQUOTLINEUID` | decimal(38,10) | **Likely FK back to a specific base `quotationline.QUOTATIONLINEID`** — i.e. "this is an alternate offered *for* that line". Unconfirmed, join query added. |
+| `MANUFACTURERNAME` | varchar(254) | Full manufacturer name (vs. the short `MANUFACTURER` code both tables share) |
+| `SERVICE` | decimal(38,10) | A separate boolean-ish column, distinct from `LINETYPE='SERVICE'` — meaning unclear, low priority |
+| `QL2` | varchar(30) | **Likely the real technical-acceptance status field** — values seen: `QUOTED`, `TNA` (Technically Not Acceptable?). Same field/values also appeared in `quotationline`'s sample. |
+
+**Key structural findings:**
+
+1. The sample batch is routine MRO/stock-replenishment procurement (coffee,
+   cardamom, tea, bearings, light fittings, hand tools) under `TRANSORG`
+   (the transmission-company org seen earlier) — not a construction BOQ.
+   Consistent with `quotationline`'s sample: **still no confirmed example of
+   a populated `BOQITEMNUM` in either table.**
+2. Alternates appear to be a general-purpose mechanism (any RFQ line can
+   have a bidder-proposed substitute), not something specific to
+   construction/BOQ tenders.
+3. `QL2`'s `QUOTED`/`TNA` values are the closest thing to a per-line
+   technical-acceptance signal seen so far — worth confirming the full
+   distinct value set (only 2 values seen in a small sample).
 
 ## `docinfo` / `doclinks` / `vw_rfqvendor_documents` — attached documents
 
@@ -184,3 +208,8 @@ _updating to match once `altquotationline`/`docinfo` findings are in too._
 - Confirm whether the `binary`-typed award/discount-cost columns in
   `rfqvendor` are genuinely encrypted, and if so, what the supported way to
   read real values is (the `WDIS` decimal columns, a view, an API, etc).
+- **`BOQITEMNUM` has been null in every sample row seen so far, across both
+  `quotationline` and `altquotationline`** (both samples happened to be
+  catalog/MRO-type RFQs, not construction BOQs) — still need one real
+  populated example before the item-numbering theory can be called
+  confirmed rather than just plausible.

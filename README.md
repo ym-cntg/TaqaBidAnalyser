@@ -1,129 +1,47 @@
-# TAQA Bid Analyzer Demo
+# TAQA Bid Analyzer — Maximo Data Analysis
 
-AI-driven commercial bid analysis tool for TAQA/ADDC procurement.
+This branch (`maximo-data-analysis`) is a clean-room exploration of TAQA's
+**real** Maximo procurement data, now landed in Databricks Unity Catalog, as
+a prerequisite to extending the bid-analyzer application (see `CLAUDE.md`
+for the full project background — business case, manual process, sample
+tender data) to work against real data instead of the hand-curated sample
+set in `data/power` and `data/water`.
 
-## Getting Started
+## Why this branch is bare-bones
 
-### Backend (FastAPI)
+The full application (FastAPI backend, Next.js frontend, all the
+sample-data extraction/comparison/reporting logic) lives on
+`full-feature-buildout`. It's deliberately **not** carried over here: this
+branch's job is to understand the shape of the real Maximo tables first,
+not to build features against an assumption of what they contain. Once the
+real schema is understood, the relevant pieces get built (or ported) with
+that knowledge — rather than guessing now and reworking later, the same
+lesson learned from the water-tender sample data turning out to have a
+different BOQ schema than power's (see `full-feature-buildout`'s
+`PROGRESS.md`, 2026-07-20 entry).
 
-```bash
-cd ~/Desktop/Projects/TAQA/bid_analyzer_demo
-uv run uvicorn backend.main:app --reload --port 8000
-```
+## What's here
 
-- API: http://localhost:8000/api
-- Health check: http://localhost:8000/health
+- `CLAUDE.md` — full project background (kept from the main line of work).
+- `project_details/` — original business-case materials (kept).
+- `databricks/` — notebook-style exploration scripts for the Unity Catalog
+  tables TAQA has landed. See `databricks/README.md`.
 
-### Frontend (Next.js)
+## Data source
 
-```bash
-cd ~/Desktop/Projects/TAQA/bid_analyzer_demo/frontend
-npm run dev
-```
+Unity Catalog: **`ingestion_framework_test.bid_data_exploration`**
 
-- UI: http://localhost:3000
+| Table | Likely maps to |
+|---|---|
+| `rfq` | Tender / Request for Quotation header |
+| `rfqvendor` | One row per bidder submission against an RFQ |
+| `quotationline` | Bidder's priced BOQ line items |
+| `altquotationline` | Alternate/optional quotation lines |
+| `docinfo` | Attached-document metadata |
+| `doclinks` | Links between documents and RFQ/vendor records |
+| `vw_rfqvendor_documents` | View joining vendor submissions to their documents |
 
-### Docker
-
-```bash
-docker compose up --build
-```
-
-- UI: http://localhost
-
-## Azure Deployment
-
-**Prerequisites**: Azure CLI installed and logged in (`az login`)
-
-### 1. Create resource group and container registry
-
-```bash
-az group create --name taqa-bid-analyzer-rg --location uaenorth
-```
-Create the resource group.
-
-```bash
-az acr create --resource-group taqa-bid-analyzer-rg --name taqabidanalyzeracr --sku Basic
-```
-Create the Azure Container Registry.
-
-```bash
-az acr update -n taqabidanalyzeracr --admin-enabled true
-```
-Enable admin credentials so App Service can pull images.
-
-### 2. Build and push the image
-
-```bash
-az acr build --registry taqabidanalyzeracr --image bid-analyzer:latest -f Dockerfile .
-```
-Build the Docker image in Azure (no local push needed).
-
-### 3. Create App Service and deploy
-
-```bash
-az appservice plan create --name taqa-bid-plan --resource-group taqa-bid-analyzer-rg --sku B1 --is-linux
-```
-Create the App Service plan.
-
-```bash
-az webapp create --name taqa-bid-analyzer --resource-group taqa-bid-analyzer-rg --plan taqa-bid-plan --deployment-container-image-name taqabidanalyzeracr.azurecr.io/bid-analyzer:latest
-```
-Create the web app pulling from ACR.
-
-```bash
-az webapp config appsettings set --resource-group taqa-bid-analyzer-rg --name taqa-bid-analyzer --settings AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT='https://taqad-sai.cognitiveservices.azure.com/' AZURE_DOCUMENT_INTELLIGENCE_KEY='<your-key>'
-```
-Set environment variables for Azure Document Intelligence.
-
-### 4. Link ACR credentials to App Service
-
-```bash
-ACR_PWD=$(az acr credential show -n taqabidanalyzeracr --query "passwords[0].value" -o tsv)
-```
-Retrieve ACR password.
-
-```bash
-az webapp config appsettings set --resource-group taqa-bid-analyzer-rg --name taqa-bid-analyzer --settings DOCKER_REGISTRY_SERVER_URL='https://taqabidanalyzeracr.azurecr.io' DOCKER_REGISTRY_SERVER_USERNAME='taqabidanalyzeracr' DOCKER_REGISTRY_SERVER_PASSWORD="$ACR_PWD"
-```
-Set ACR pull credentials so App Service can pull the image.
-
-### 5. Restart and verify
-
-```bash
-az webapp restart --name taqa-bid-analyzer --resource-group taqa-bid-analyzer-rg
-```
-Restart the app to pick up changes.
-
-- App URL: https://taqa-bid-analyzer.azurewebsites.net
-
-## Making Code Changes
-
-### Test locally with Docker
-
-```bash
-docker build -f Dockerfile -t bid-analyzer:local .
-```
-Build the container locally.
-
-```bash
-docker run -d -p 8080:80 --env-file .env bid-analyzer:local
-```
-Run the container on http://localhost:8080.
-
-```bash
-docker stop $(docker ps -q --filter "publish=8080")
-```
-Stop the local container when done testing.
-
-### Deploy updated image to Azure
-
-```bash
-az acr build --registry taqabidanalyzeracr --image bid-analyzer:latest -f Dockerfile .
-```
-Rebuild the image in ACR with your local changes.
-
-```bash
-az webapp restart --name taqa-bid-analyzer --resource-group taqa-bid-analyzer-rg
-```
-Restart the App Service to pull the new image.
+These mappings are inferred from table/column names and TAQA's manual
+process (`project_details/power_transcript.md`) — not yet confirmed against
+real rows. That confirmation is exactly what the exploration notebook is
+for.

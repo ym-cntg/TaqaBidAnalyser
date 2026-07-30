@@ -175,14 +175,17 @@ tax/discount columns), plus:
 
 ## `docinfo` / `doclinks` / `vw_rfqvendor_documents` — attached documents
 
-_Pending — notebook not yet shared._
+**Deliberately deferred** — notebook 5 was run, but we're intentionally not
+digging into it yet and coming back to it later. Still important: this is
+the table that determines whether actual bid documents (Excel/PDF) are
+retrievable at all, or whether this is metadata-only. Pick up here next.
 
 ## Cross-table relationships
 
 _Pending — the join key question this section originally flagged is now_
 _resolved (see the correction under `quotationline` above): `(RFQNUM, VENDOR)`,_
 _not a single FK id. `06_cross_table_relationships.ipynb`'s queries need_
-_updating to match once `altquotationline`/`docinfo` findings are in too._
+_updating to match once `docinfo` findings are in too._
 
 ---
 

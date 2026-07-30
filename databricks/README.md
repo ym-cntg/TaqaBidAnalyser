@@ -1,22 +1,22 @@
 # Databricks exploration notebooks
 
-## Running this
+## Running these
 
 This repo is connected to the Databricks workspace via **Databricks
-Repos** (git-backed). To run the exploration notebook:
+Repos** (git-backed). To run the exploration notebooks:
 
 1. In the Databricks workspace, open this repo under **Repos** and make
    sure you're on the `maximo-data-analysis` branch (pull if needed).
-2. Open `databricks/explore_bid_data.py` — Databricks renders it as a
-   notebook automatically (the `# Databricks notebook source` header and
-   `# COMMAND ----------` cell markers are Databricks' native notebook
-   format, not a custom convention).
-3. Attach it to a cluster and run all cells.
+2. Open any notebook under `databricks/notebooks/` — they're real `.ipynb`
+   files, Databricks renders them with the standard notebook UI directly.
+3. Attach to a cluster and run all cells, in order (01 → 06) — `06` builds
+   on column names you'll only know after running `02` and `03`.
 
-No credentials are needed in this repo for this — the notebook uses the
-`spark` session Databricks provides natively inside the workspace, and
-reads directly from Unity Catalog (`ingestion_framework_test.bid_data_exploration`)
-using whatever access the attached cluster/your identity already has.
+No credentials are needed in this repo for this — each notebook's `%sql`
+cells run against the `spark` session Databricks provides natively inside
+the workspace, reading directly from Unity Catalog
+(`ingestion_framework_test.bid_data_exploration`) using whatever access the
+attached cluster/your identity already has.
 
 ## Why notebooks, not a local script
 
@@ -28,8 +28,18 @@ git but *runs* in the workspace with its own auth. If a local/CI query
 path is ever needed later (e.g. to feed the bid-analyzer backend from
 outside Databricks), that's a deliberate follow-up, not a default.
 
-## Files
+## Files — one targeted notebook per table/concern, not one giant script
 
-- `explore_bid_data.py` — schema/row-count/sample exploration of all 7
-  tables in `ingestion_framework_test.bid_data_exploration`, with
-  "Observations" cells to fill in per table as findings come in.
+| Notebook | Covers |
+|---|---|
+| `01_rfq.ipynb` | `rfq` — tender/RFQ header |
+| `02_rfqvendor.ipynb` | `rfqvendor` — one row per bidder submission |
+| `03_quotationline.ipynb` | `quotationline` — priced BOQ line items (the core data) |
+| `04_altquotationline.ipynb` | `altquotationline` — alternate/optional lines |
+| `05_documents.ipynb` | `docinfo`, `doclinks`, `vw_rfqvendor_documents` — attached documents |
+| `06_cross_table_relationships.ipynb` | Joins across tables + a summary checklist to fill in once 01-05 are done |
+
+Each notebook (except 06) follows the same shape: what the table is
+expected to represent, `DESCRIBE TABLE`, a row count, a 20-row sample, and
+an "Observations" cell to fill in once you've actually looked at it — that
+write-up is the real deliverable, not the raw query output.

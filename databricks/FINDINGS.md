@@ -6,7 +6,9 @@ go — treat anything marked "pending" as not yet confirmed.
 
 **Status: Run 2 (follow-up queries) complete for notebooks 01-04.** Notebook
 05 (`docinfo`/`doclinks`/documents) is still deliberately deferred. Notebook
-06 (cross-table) has not been productively advanced — see its section below.
+06 (cross-table) has now been rebuilt with working queries (Run 2) — pending
+results. `01_rfq.ipynb` also has a new Run 3 section pending results, testing
+whether `DETAILBOQAVAILABLE` actually means what we've assumed.
 
 ---
 

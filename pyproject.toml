@@ -1,10 +1,13 @@
 [project]
-name = "taqa-maximo-data-analysis"
+name = "taqa-maximo-integrated-buildout"
 version = "0.1.0"
-description = "Exploration of real Maximo procurement data (RFQ/vendor/quotation tables) via Databricks Unity Catalog"
+description = "TAQA Bid Analyzer rebuilt against real Maximo data via Databricks, deployed as a Databricks App"
 readme = "README.md"
 requires-python = ">=3.11.11"
 dependencies = [
-    "pandas>=2.0.0",
+    "fastapi>=0.138.0",
+    "uvicorn>=0.49.0",
     "python-dotenv>=1.2.2",
+    "databricks-sql-connector>=3.0.0",
+    "databricks-sdk>=0.30.0",
 ]

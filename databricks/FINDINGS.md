@@ -4,11 +4,16 @@ Running log of what the real Unity Catalog tables (`ingestion_framework_test.bid
 actually contain, as notebooks get run and results come back. Updated as we
 go — treat anything marked "pending" as not yet confirmed.
 
-**Status: Run 2 (follow-up queries) complete for notebooks 01-04.** Notebook
-05 (`docinfo`/`doclinks`/documents) is still deliberately deferred. Notebook
-06 (cross-table) has now been rebuilt with working queries (Run 2) — pending
-results. `01_rfq.ipynb` also has a new Run 3 section pending results, testing
-whether `DETAILBOQAVAILABLE` actually means what we've assumed.
+**Status: Run 2 complete for notebooks 01-04. Notebooks 07/08 (single-bid
+end-to-end traces) also complete for 07 and Part 1 of 08** — see the new
+section below for major corrections these surfaced (`BOQITEMNUM` is not how
+real detailed BOQs are structured; documents are real and queryable).
+Notebook 05 (`docinfo`/`doclinks`/documents) is still formally un-run as its
+own notebook, but 07/08 already pulled real schema + data from the same
+tables. Notebook 06 (cross-table) and `01_rfq.ipynb`'s Run 3 section are
+still pending results. Notebook 08's Part 2 (`null`-flagged example) needs
+a re-run — it was left with an empty widget, so it returned no data; use
+`N-19899` (a good candidate, see below).
 
 ---
 
@@ -38,7 +43,11 @@ surfaces two things that don't match the demo's assumptions:
    (179.4M) in `CLAUDE.md` exactly — good sign that code = AL Geemi. But the
    row Maximo marks `ISAWARDED = 1` is vendor `001938` at **142,459,514.10**
    — a bidder/price that matches neither AL Geemi (179.4M) nor AGPOWER's
-   estimated ~64.2M. Full list of the 8 real quoted totals:
+   estimated ~64.2M. **Now doubly confirmed**: `rfq.TOTALAWVALUE` for
+   D-111808 is exactly `142,459,514.1000` — the header-level award total
+   matches vendor `001938`'s line independently, via a completely different
+   table/column. This is a real, corroborated award, not a data artifact.
+   Full list of the 8 real quoted totals:
 
    | Vendor code | Total quoted | `ISAWARDED` |
    |---|---|---|
@@ -59,6 +68,106 @@ surfaces two things that don't match the demo's assumptions:
    scenario diverges from what actually happened on this real tender. **This
    needs a straight answer from TAQA before treating the sample data's
    negotiation-round story as representative of real outcomes.**
+
+---
+
+## Notebooks 07/08 — single-bid end-to-end traces (major corrections here)
+
+Traced one real `DETAILBOQAVAILABLE = 'Y'` tender (`N-19535`, chosen as the
+richest candidate) end-to-end through every table, and did the same for
+D-111808. Two of these results overturn earlier theories.
+
+### D-111808's own `rfq` row, checked for the first time
+
+`DETAILBOQAVAILABLE = null` — **not `Y` or `N`.** This directly answers the
+open question from `01_rfq.ipynb`'s Run 3. D-111808 is a fully real, awarded,
+124M-estimated / 142.46M-awarded construction tender — not an edge case —
+and its flag was simply never set. **This is strong evidence `null` means
+"never assessed", not "no BOQ"** — a genuinely important, high-value tender
+falls into the 98.2%-null bucket alongside whatever else is in there.
+Also: `TOTALCOST = 124,000,000.0000` (likely the internal budgeted/estimated
+cost, distinct from `ESTIMATEDCOST` which is `null` here) vs. the real award
+of 142.46M — the award came in ~15% over the internal cost figure.
+`DISCOUNT_REVISION = 3` at the header level matches vendor `001938`'s
+`DISCOUNT_REVISION`/`POSTBID_DISCOUNT_COUNTER` (both `3`) exactly — another
+clean confirmation of the round mechanism. `PMETHOD = 'SAO'` — a
+procurement-method code not seen before.
+
+### `BOQITEMNUM` is NOT how real detailed BOQs are structured — correction to Run 2's softened theory
+
+`N-19535` (400kV OHL works, ~307M AED, `DETAILBOQAVAILABLE = 'Y'`, 9 invited
+vendors) has **2,480 real `quotationline` rows — and every single one has
+`BOQITEMNUM = null`.** This is the richest, most detailed real BOQ we've
+seen yet, and the column we originally thought was "the real hierarchical
+item number" is entirely unpopulated on it. What actually carries the
+structure instead:
+- **`RFQLINENUM`** — plain sequential position (1, 2, 3…), same as always.
+- **`DESCRIPTION`** carries real hierarchy and pricing-type information as
+  free text — e.g. `"Section : 1 - LILO OF 400kV D/C OHL PVDF (PV2) - PVAJ
+  (PV3) to HFRG"` for a section-header row, and item descriptions with
+  `"(ERECTION PRICE / LOCAL)"` suffixed directly onto the text.
+- **`ORDERUNIT = 'HEADER'`** on section-break rows (with `UNITCOST`/
+  `LINECOST` both `null`) — a textual marker for a non-priced heading row
+  mixed into the same flat line sequence as real priced rows.
+- `LINETYPE` was uniformly `SERVICE` across the sample seen here — doesn't
+  split CIF/Erection for this tender either; that distinction, if present,
+  lives in the `DESCRIPTION` text itself (`"ERECTION PRICE"`) rather than a
+  structured column.
+- `ISAWARDED` at the line level: 539 of 2,480 lines marked awarded (21.7%)
+  — real, granular, per-line award data on a genuinely large multi-vendor
+  BOQ, consistent with the pattern already confirmed on `D19885308`.
+
+**Correction:** `BOQITEMNUM` should not be treated as the general mechanism
+for item-level structure — it appears to populate only for certain
+smaller catalog/material/service RFQs (as seen in Run 2's `D19892718`/
+`N-20711.1` examples), not for large detailed construction/works BOQs like
+`N-19535`. The real, general parsing target for line-item structure is
+**`RFQLINENUM` order + `DESCRIPTION` text patterns**, not `BOQITEMNUM`.
+
+**Good news:** `DETAILBOQAVAILABLE = 'Y'` *did* correlate with a genuinely
+rich, real, multi-vendor detailed BOQ here (2,480 lines, 9 vendors) — the
+flag has real signal for "this is a detailed procurement", even though the
+`BOQITEMNUM` column doesn't cooperate.
+
+### Documents are real, richly populated, and queryable — via `vw_rfqvendor_documents`
+
+Schema (discovered live, notebook 05 itself still not formally run):
+`docinfo` (36 columns) and `doclinks` (39 columns) are complex, but
+**`vw_rfqvendor_documents`** is a clean, pre-joined, lowercase-named view:
+`rfqnum`, `vendor`, `bidstatus`, `rfqvendorid`, `ownertable`, `docinfoid`,
+`document`, `urlname`.
+
+Filtering it by `rfqnum = 'N-19535'` returned **386 real rows** — actual
+named documents per vendor: bid bonds (`"TENDER BOND N-19535-AED 400K"`),
+tender docs, manpower histograms, technical submission folders
+(`"FOLDER NO. 4.3 VENDOR DOCUMENTS"`), narrative program assumptions, etc.
+**`urlname` is a Windows UNC file path** on an internal file server, e.g.:
+```
+\\advapfsn02\LinkedDocs\DoclinkProd\doclinks\EBID\TECHBID\FolderNo.4.3VendorDocuments.pdf
+```
+**This resolves the long-standing open question**: document *metadata* is
+real, rich, and fully queryable via Unity Catalog/SQL right now. Actual
+document *content* is not — it lives on an on-prem Windows file share
+(`advapfsn02`), which Databricks SQL has no path to. Retrieving real file
+content would need a separate integration (VPN/network path access, or
+whatever this file server has been migrated to, if anything) — a genuinely
+different and larger piece of work than anything SQL-only can solve.
+
+**D-111808's own documents were not actually checked** in this run (the
+query was left commented out) — fixed and ready to run next time
+(`08_trace_bid_without_boq.ipynb`, Part 1).
+
+### Part 2 of `08` (the `null`-flagged example) didn't actually run
+
+The widget (`null_rfqnum`) was left empty, so every Part 2 query returned 0
+rows — this wasn't a real test yet. From the candidates query that *did*
+run, though, one signal jumped out already: **`N-19899`** (a `null`-flagged
+fire-alarm-system blanket agreement, 38,740 lines, 5 vendors) has **7,748
+distinct `BOQITEMNUM` values** — populated, unlike `N-19535`'s `Y`-flagged
+example which had zero. That's an early hint that `BOQITEMNUM` population
+and `DETAILBOQAVAILABLE` may be close to *independent* signals, not
+correlated in either direction. Flagged as the candidate for next run
+(notebook and its widget are ready — just needs `N-19899` pasted in).
 
 ---
 
@@ -123,11 +232,14 @@ surfaces two things that don't match the demo's assumptions:
    `-R1`/`-R2` `RFQNUM` suffix pattern found in `rfqvendor` (see below) —
    these appear to be two different, occasionally-overlapping mechanisms,
    not one.
-4. **`DETAILBOQAVAILABLE`** is real but rare (553 of 30,338 rows) — plausible
-   as the sample data's `data_gap` concept, but only if D-111808 itself has
-   it set, which we haven't directly checked yet (D-111808 didn't appear in
-   the substation-description or recent-date sample rows shown so far —
-   worth a direct point lookup).
+4. **`DETAILBOQAVAILABLE`** is real but rare (553 of 30,338 rows). **Now
+   checked directly: D-111808's own value is `null`**, not `Y` or `N` (see
+   "Notebooks 07/08" section above) — despite being a fully real, awarded
+   124M+ construction tender. That's strong evidence `null` means "never
+   assessed", not "no BOQ" — treating it as a clean `data_gap` proxy is not
+   safe. It does still correlate with real richness where it IS set to `Y`
+   (confirmed on `N-19535`, 2,480 real lines) — just don't trust the null
+   bucket to mean absence.
 5. **`STAGE` is dead weight** — 100% null, don't rely on it for anything.
 
 ---
@@ -263,7 +375,16 @@ is invitees, not just actual submitters)
    item number** — this is a correction to the "hierarchical item number"
    theory from Run 1. It may still carry hierarchy in *some* tenders (worth
    checking `N-17334`'s `LOT 01`/`02`/`03` pattern further), but it isn't
-   safe to assume line-item granularity from this column alone.
+   safe to assume line-item granularity from this column alone. **Further
+   correction (notebook 07, see "Notebooks 07/08" section above): on
+   `N-19535` — a large, real, `DETAILBOQAVAILABLE='Y'` BOQ with 2,480 lines
+   — `BOQITEMNUM` is null on every single row.** The real structural
+   mechanism for a big detailed works/construction BOQ is `RFQLINENUM`
+   sequence + free-text `DESCRIPTION` (including `ORDERUNIT='HEADER'`
+   marker rows for section breaks, and CIF/Erection-type annotations
+   embedded directly in the description text) — not `BOQITEMNUM` at all.
+   `BOQITEMNUM` seems to populate mainly for smaller catalog/material/
+   service RFQs instead.
 3. Join back to `rfqvendor` is the composite key `(RFQNUM, VENDOR)`, **not**
    a single `RFQVENDORID`/`RFQVENDOR_ID` FK column — confirmed, no such
    column exists in this table (correcting an earlier bad inference from
@@ -337,13 +458,24 @@ tax/discount columns), plus:
 
 ## `docinfo` / `doclinks` / `vw_rfqvendor_documents` — attached documents
 
-**Deliberately deferred** — notebook 5 was run, but we're intentionally not
-digging into it yet and coming back to it later. **This is now the single
-most important open thread**, given the headline finding above: if
-itemized BOQ line-item pricing genuinely doesn't exist in `quotationline`
-for construction tenders like D-111808, the only place that detail could
-possibly live is inside the actual attached bid document — which is exactly
-what this table set would surface. Pick up here next.
+**No longer a black box** — notebook 05 itself is still formally un-run, but
+notebooks 07/08 pulled real schema and data from these tables directly (see
+"Notebooks 07/08" section above for full detail). Summary:
+
+- `docinfo` (36 cols) and `doclinks` (39 cols) have complex schemas — not
+  yet fully explored.
+- **`vw_rfqvendor_documents` is a clean, ready-to-use, pre-joined view**:
+  `rfqnum`, `vendor`, `bidstatus`, `rfqvendorid`, `ownertable`, `docinfoid`,
+  `document`, `urlname` (note: lowercase column names, unlike every other
+  table). Filtering by `rfqnum` works and returns real rows — 386 for
+  `N-19535` alone (bid bonds, tender docs, technical submissions, etc).
+- **Document metadata is real and fully queryable via SQL right now.**
+  Document *content* is not — `urlname` is a Windows UNC path
+  (`\\advapfsn02\LinkedDocs\DoclinkProd\doclinks\...`) on an on-prem file
+  share Databricks SQL can't reach. Retrieving actual file bytes would need
+  a separate integration, not more SQL.
+- D-111808's own documents specifically haven't been checked yet — query is
+  ready in `08_trace_bid_without_boq.ipynb` (Part 1), just needs a re-run.
 
 ---
 
@@ -364,16 +496,22 @@ clear next step once notebook 05 unblocks or in parallel with it.
 
 ---
 
-## Open questions for TAQA (updated after Run 2)
+## Open questions for TAQA (updated after notebooks 07/08)
 
 - **The vendor-price discrepancy on D-111808** (headline finding): the real
-  Maximo-recorded award (vendor `001938`, 142.46M) doesn't match either
-  named bidder's numbers in the sample data. Need to understand whether the
-  sample data represents a different scenario/round than what's in Maximo,
-  or whether AGPOWER's real structured total was simply never captured this
-  way.
+  Maximo-recorded award (vendor `001938`, 142.46M, now doubly confirmed via
+  `rfq.TOTALAWVALUE` matching exactly) doesn't match either named bidder's
+  numbers in the sample data. Need to understand whether the sample data
+  represents a different scenario/round than what's in Maximo, or whether
+  AGPOWER's real structured total was simply never captured this way.
 - Where is the itemized BOQ line-item detail for a real construction tender
-  like D-111808, if not in `quotationline`? (→ notebook 05's job to check)
+  like D-111808, if not in `quotationline`? Given `N-19535` (a genuinely
+  detailed real BOQ) structures itself via `RFQLINENUM` + free-text
+  `DESCRIPTION` rather than `BOQITEMNUM`, D-111808's single lump-sum line
+  may just mean this particular tender's pricing was never broken into line
+  items in Maximo at all (lump-sum bidding), not that the detail exists
+  elsewhere and we're missing it. Worth a direct question to TAQA rather
+  than more digging.
 - Confirm how lots are modeled — still no lot column or lot indicator found
   anywhere across `rfq`, `quotationline`, or `altquotationline`.
 - Reconcile the two round mechanisms: `DISCOUNT_REVISION`/
@@ -381,10 +519,12 @@ clear next step once notebook 05 unblocks or in parallel with it.
   vs. the `-R1`/`-R2` `RFQNUM` suffix (rare, ~0.12% of rows) — are these
   really two different real-world processes (post-bid discount loop vs.
   formal re-tender), or does one supersede the other in practice?
-- Is `BOQITEMNUM`'s coarse-grouping behavior (`"PART 1"`, `"HEADER"`,
-  `"LOT 01"`) intentional/standard, or tender-specific data entry variance?
-  Does it ever carry true item-level granularity, or is that only ever in
-  the source document?
+- ~~Is `BOQITEMNUM`'s coarse-grouping behavior intentional/standard?~~
+  **Largely answered**: it doesn't populate at all for large detailed
+  works BOQs (`N-19535`, 2,480 lines, all null) — real structure lives in
+  `RFQLINENUM` + `DESCRIPTION` text instead. Remaining question: is there
+  *any* tender type where `BOQITEMNUM` carries genuine unique per-item
+  meaning, or is it effectively vestigial across the board?
 - Find/get access to a vendor/company master table — `rfqvendor.VENDOR` is
   a bare code; `99473989` is now tentatively AL Geemi by price match, but
   this needs a real lookup table to confirm and scale.
@@ -397,3 +537,11 @@ clear next step once notebook 05 unblocks or in parallel with it.
 - Confirm the current/active `ORGID` value(s) to filter to ADDC-relevant
   records only — 7 orgs confirmed present (`ADDC`, `TRANS`, `AADC`, `ADWEA`,
   `AMPC`, `ADSSC`, `BPC`).
+- **New**: is there any supported way to reach the actual document files
+  behind `vw_rfqvendor_documents.urlname` (the `advapfsn02` UNC file
+  share), or has that content been migrated somewhere network-reachable
+  from Databricks/the app? This determines whether real bid documents can
+  ever be pulled programmatically, or only manually.
+- ~~Can bid documents be retrieved via `docinfo`/`doclinks`, or is this
+  metadata-only?~~ **Answered**: metadata only, from SQL. Real content
+  needs separate file-share access (see above).

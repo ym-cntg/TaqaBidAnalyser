@@ -129,6 +129,29 @@ rich, real, multi-vendor detailed BOQ here (2,480 lines, 9 vendors) — the
 flag has real signal for "this is a detailed procurement", even though the
 `BOQITEMNUM` column doesn't cooperate.
 
+### `RFQLINENUM` confirmed as the real cross-vendor join key (replaces `BOQITEMNUM`)
+
+Directly tested on `N-19535`'s 4 vendors who actually submitted (out of 9
+invited — `003235`, `003300`, `99134662`, `99471778`): **620 distinct
+`RFQLINENUM` values, each appearing exactly once per vendor** (620 × 4 =
+2,480 rows, zero duplicate `(RFQLINENUM, VENDOR)` pairs), and **100% of
+them have identical `DESCRIPTION`/`ORDERQTY`/`ORDERUNIT` across all 4
+vendors — zero mismatches.** Only `UNITCOST`/`LINECOST` vary by vendor, as
+expected for genuinely independent pricing against a shared template. E.g.
+`RFQLINENUM = 6` ("30 Meter depth (ERECTION PRICE / LOCAL)") shows
+`UNITCOST` of `null` (vendor `003235`, a real unquoted-item case), `11,000`,
+`6,229`, and `38,000` for the other three — same item, four different
+prices.
+
+**This means `RFQLINENUM` (scoped to `RFQNUM`) is the reliable line-item
+join key for comparing vendors on the same tender — not `BOQITEMNUM`,**
+consistent with ADDC's standardized BOQ template (same line-numbered
+template to every bidder, prices filled in against fixed line numbers).
+Confirmed on one real example so far (a strong test — 620 real lines, not
+trivial) — worth a second spot-check on another detailed BOQ before treating
+this as a hard rule for pipeline logic, but this is exactly what a
+comparison tool needs and didn't have before this notebook.
+
 ### Documents are real, richly populated, and queryable — via `vw_rfqvendor_documents`
 
 Schema (discovered live, notebook 05 itself still not formally run):
@@ -522,9 +545,12 @@ clear next step once notebook 05 unblocks or in parallel with it.
 - ~~Is `BOQITEMNUM`'s coarse-grouping behavior intentional/standard?~~
   **Largely answered**: it doesn't populate at all for large detailed
   works BOQs (`N-19535`, 2,480 lines, all null) — real structure lives in
-  `RFQLINENUM` + `DESCRIPTION` text instead. Remaining question: is there
-  *any* tender type where `BOQITEMNUM` carries genuine unique per-item
-  meaning, or is it effectively vestigial across the board?
+  `RFQLINENUM` + `DESCRIPTION` text instead, and `RFQLINENUM` is now
+  confirmed as a working cross-vendor join key on that same example (100%
+  match on `DESCRIPTION`/`ORDERQTY`/`ORDERUNIT` across all 4 submitting
+  vendors, 620 lines). Remaining question: is there *any* tender type where
+  `BOQITEMNUM` carries genuine unique per-item meaning, or is it
+  effectively vestigial across the board?
 - Find/get access to a vendor/company master table — `rfqvendor.VENDOR` is
   a bare code; `99473989` is now tentatively AL Geemi by price match, but
   this needs a real lookup table to confirm and scale.

@@ -152,6 +152,41 @@ trivial) — worth a second spot-check on another detailed BOQ before treating
 this as a hard rule for pipeline logic, but this is exactly what a
 comparison tool needs and didn't have before this notebook.
 
+### Lots and rounds inside the BOQ itself
+
+**Rounds leave a real trace at the line-item level — but only as a
+before/after snapshot, not a history.** On `N-19535`'s real data:
+`LINECOST` (original quote) vs. `LINECOSTWDIS` (post-discount price) differ
+on 1,146 of 2,480 lines (46%), with `DISCOUNT_PERCENT` varying **per line**
+(0%, 4.29%, 13.86%, 14.72%, even 100% on some lines) — not one blanket
+vendor-wide discount. `DISCOUNT_APPLIED_AFTERBIDS` is set on 1,843/2,480
+lines (74%). **But `quotationline` has no round-number column and no
+change-timestamp** — only `ENTERDATE` (a single initial-entry stamp, no
+`CHANGEDATE`). So this table only ever shows original-vs-final state; if
+there were multiple negotiation rounds, the intermediate ones are
+overwritten, not preserved. The header-level `DISCOUNT_REVISION` counter
+(`rfq`/`rfqvendor`) remains the only record of *how many* rounds happened —
+`quotationline` just shows the net effect of however many there were.
+`DISCOUNT_UNITCOST` was 100% null in this sample — appears unused, at least
+here. `QUOTESTARTDATE`/`QUOTEENDDATE` were also 100% null.
+
+**Lots have no structural home anywhere — confirmed, not just assumed.**
+- No column named anything like `LOT` in any of the 4 line-item/header
+  schemas (checked directly across all `DESCRIBE` output pulled so far).
+- **D-111808 itself has zero lot-suffixed `RFQNUM` variants** — re-checked
+  the `RFQNUM LIKE 'D-111808%'` results already pulled in `02_rfqvendor` and
+  `03_quotationline`: only the exact `D-111808` appears, no `-L1`/`-L2`/etc.
+  Combined with the one-lump-sum-line-per-vendor finding, this strongly
+  suggests **ADDC's real 3-substation lot split (SHBPRY/DRPRY/SMHPRY) was
+  never captured in Maximo's structured tables for this tender at all** — if
+  it exists anywhere, it's only inside the bidder's attached document.
+- The word "lot" does appear as free text, but means something unrelated:
+  on `N-19535`, `"Lot = 13 KM"` (204 hits) is a batch-pricing unit — price
+  per 13km segment of cable — not a tender-lot division. Separately, Run
+  2's `N-17334` example had `BOQITEMNUM` values literally `"LOT 01"`/
+  `"LOT 02"`/`"LOT 03"` — a real but apparently one-off, ad-hoc usage, not a
+  consistent mechanism reused elsewhere.
+
 ### Documents are real, richly populated, and queryable — via `vw_rfqvendor_documents`
 
 Schema (discovered live, notebook 05 itself still not formally run):
@@ -535,8 +570,20 @@ clear next step once notebook 05 unblocks or in parallel with it.
   items in Maximo at all (lump-sum bidding), not that the detail exists
   elsewhere and we're missing it. Worth a direct question to TAQA rather
   than more digging.
-- Confirm how lots are modeled — still no lot column or lot indicator found
-  anywhere across `rfq`, `quotationline`, or `altquotationline`.
+- ~~Confirm how lots are modeled~~ **Largely answered**: no lot column or
+  indicator exists anywhere (`rfq`, `quotationline`, `altquotationline`),
+  and D-111808 has zero lot-suffixed `RFQNUM` variants — lots appear to
+  simply not be captured in Maximo's structured tables at all for this
+  tender. Remaining question for TAQA: is this true generally, or does some
+  other tender actually split lots as separate RFQNUMs (worth one more
+  spot-check on a known multi-lot tender before generalizing)?
+- **New**: `quotationline` shows real per-line discount data
+  (`LINECOST`/`LINECOSTWDIS`/`DISCOUNT_PERCENT`) but no round-number or
+  change-timestamp column — only original-vs-final state is visible, no
+  round-by-round history. Confirm with TAQA whether that intermediate
+  history exists anywhere in Maximo (even if not in these 7
+  tables/views) — it matters for whether a rebuilt comparison tool can ever
+  show true round-over-round movement per line, or only net effect.
 - Reconcile the two round mechanisms: `DISCOUNT_REVISION`/
   `POSTBID_DISCOUNT_COUNTER` (common, ~12% of vendor rows, lockstep-paired)
   vs. the `-R1`/`-R2` `RFQNUM` suffix (rare, ~0.12% of rows) — are these

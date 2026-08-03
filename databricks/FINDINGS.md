@@ -229,6 +229,95 @@ correlated in either direction. Flagged as the candidate for next run
 
 ---
 
+## Notebook 09 — client walkthrough: real numbers across the whole dataset
+
+First run against the full 30,338-row `rfq` universe, not just hand-picked
+examples. See `databricks/notebooks/09_client_walkthrough_boq_analysis.ipynb`.
+
+### Headline: only 10.8% of RFQs have a genuinely detailed, line-by-line BOQ
+
+Classified by real structure (average `quotationline` rows per vendor),
+not the unreliable `DETAILBOQAVAILABLE` flag:
+
+| Category | RFQ count | % of all RFQs | Total recorded award value |
+|---|---|---|---|
+| Lump-sum (1 line/vendor) | 10,903 | 35.9% | **AED 62,808M** |
+| Shallow (2-9 lines/vendor) | 9,893 | 32.6% | AED 28,163M |
+| No priced lines at all | 6,253 | 20.6% | AED 48M |
+| Detailed BOQ (10+ lines/vendor) | 3,289 | 10.8% | AED 47,298M |
+
+**Counter-intuitive and important**: lump-sum tenders carry the *most*
+recorded value of any category — more than genuinely detailed BOQs. The
+biggest deals in this dataset are frequently bid as a single number, not
+itemized. Concrete example: **G-5809, "Strategic Water Storage / Recovery
+Project in Liwa"** — 8 vendors, each bidding a single lump-sum line between
+**AED 1.61B and AED 2.45B**, won by the lowest bid (AED 1,611,242,556 to
+vendor `9918338`). A real, billion-AED mega-project with zero line-item
+detail in Maximo's structured data.
+
+(Caveat carried over from earlier: `total_award_value` only sums rows where
+`TOTALAWVALUE` is populated at the header level — most rows have it `null`
+— so treat this as directional, not exhaustive.)
+
+### `DETAILBOQAVAILABLE` reconfirmed dead as a signal — now with the full cross-tab
+
+|  | `N` | `Y` | `null` |
+|---|---|---|---|
+| Detailed BOQ (10+ lines/vendor) | 17 | **106** | 3,166 |
+| Shallow (2-9 lines/vendor) | 31 | 134 | 9,728 |
+| Lump-sum (1 line/vendor) | 74 | 111 | 10,718 |
+| No priced lines at all | 19 | **61** | 6,173 |
+
+Of the 3,289 RFQs that are *genuinely* detailed, only 106 (3.2%) are
+flagged `Y`. Of the 6,253 RFQs with **zero** priced lines at all, 61 are
+flagged `Y` anyway. The flag and real structure are essentially
+uncorrelated — do not use it as a proxy for BOQ detail in any pipeline
+logic.
+
+### Round tracking — a new anomaly on top of the confirmed mechanism
+
+Real example this run: `N-20585` (valve repair/replacement, 52,398 lines,
+9 vendors). `DISCOUNT_REVISION` distribution reconfirmed identical to
+earlier findings (1,305 → 662 → 294 → ... → 1 across rounds 1-12) —
+consistent, no surprises there.
+
+The line-level before/after chart surfaced something new, though: most
+lines behave as expected (`LINECOSTWDIS` slightly below `LINECOST`, e.g. a
+consistent ~1.54% discount across many of vendor `001145`'s early lines),
+but a few lines for vendor `002012` show `LINECOSTWDIS` **higher** than
+`LINECOST` (376,000 → 6,718,076), and vendor `003108`'s largest lines drop
+straight to **0**. Neither looks like an ordinary discount. **Open
+question for TAQA**: does `LINECOSTWDIS` ever legitimately increase or
+zero out for reasons other than a price discount (re-quote, disqualification,
+a data-entry correction), or is this a data-quality issue?
+
+### Fixed a bug in the 4c WDIS-confirmation test — the real result is still pending
+
+The first run of this test reported a **0% match rate (0/15)** between
+`rfq.TOTALAWVALUE` and `rfqvendor.TOTALAWARDCOSTWDIS` — but that result is
+an artifact of a flawed query, not evidence against the hypothesis. The
+query compared the header value against **every invited vendor's** WDIS
+figure (e.g. `N-19957` alone contributed 6 rows, one per invited vendor,
+all compared against the same header total) rather than filtering to the
+vendor actually marked `ISAWARDED = 1`. Only the winner should ever match —
+comparing all bidders guarantees near-total mismatch by construction. This
+is exactly the D-111808 test that *did* match earlier, because that
+comparison was manually restricted to the awarded vendor (`001938`).
+
+**Fixed** (`WHERE rv.ISAWARDED = 1` added) — needs a re-run to get the real
+match rate across a broader sample than just D-111808.
+
+### 4a (vendor names) and 4d (altquotationline) — reconfirmed, no new findings
+
+- Live `information_schema.columns` search found the same non-answers as
+  expected: `rfq.BUYERCOMPANY` and `rfq.REPNAME` are new candidates not
+  checked before — worth a quick follow-up to see what values populate
+  them (likely TAQA-side names, not bidder names, but cheap to confirm).
+- `altquotationline` row count (42,668) vs. `quotationline` (1,660,753)
+  reconfirmed exactly matching prior findings — no change.
+
+---
+
 ## `rfq` — tender / RFQ header
 
 **Row count:** 30,338
@@ -554,8 +643,17 @@ clear next step once notebook 05 unblocks or in parallel with it.
 
 ---
 
-## Open questions for TAQA (updated after notebooks 07/08)
+## Open questions for TAQA (updated after notebook 09)
 
+- **New**: does `LINECOSTWDIS` ever legitimately increase relative to
+  `LINECOST`, or drop straight to `0`, for reasons other than a price
+  discount? Seen on real lines in `N-20585` — looks like disqualification
+  or a re-quote rather than a normal discount, but that's a guess.
+- **New**: is `rfqvendor.TOTALAWARDCOSTWDIS` (filtered to the awarded
+  vendor) really the confirmed final price at scale, not just on
+  D-111808? The broader test is written (`09`, section 4c) but needs a
+  re-run after fixing a query bug (see notebook 09 section above) — no
+  real answer yet.
 - **The vendor-price discrepancy on D-111808** (headline finding): the real
   Maximo-recorded award (vendor `001938`, 142.46M, now doubly confirmed via
   `rfq.TOTALAWVALUE` matching exactly) doesn't match either named bidder's

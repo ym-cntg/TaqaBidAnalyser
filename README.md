@@ -7,24 +7,32 @@ real schema actually looks like — see `databricks/FINDINGS.md` for the full
 write-up (confirmed real tender D-111808, the `RFQLINENUM` cross-vendor join
 key, why `BOQITEMNUM` doesn't work, how documents are reachable, etc.).
 
-## Where this branch starts
+## Progress
 
-Deliberately narrow first step: a **bare-bones, one-page app** whose only
-job is to prove a deployed Databricks App can actually reach and query the
-real Unity Catalog tables. Nothing else yet — no comparison UI, no
-extraction, no reporting. Get the deployment path working first, build
-features on top of it once it's confirmed, rather than building against
-assumptions about how Databricks Apps hosting/auth actually behaves.
+**Deployment proven**: a Databricks App on this branch successfully
+connects to the SQL warehouse and queries Unity Catalog end-to-end
+(`start.sh`/`app.yaml`, FastAPI on an internal port, Next.js on the
+exposed port proxying `/api/*` to it).
 
-- `backend/main.py` — FastAPI app, one real endpoint (`/api/rfq-count`)
-  that connects to the SQL warehouse and returns a row count from `rfq`.
-- `frontend/` — one Next.js page that calls it and displays either the
-  count or a clear error message.
-- `start.sh` / `app.yaml` — Databricks Apps deployment plumbing. **Not yet
-  verified against a real deployment** — see the comments in both files.
-  This first deploy attempt is expected to need small fixes to exact env
-  var names / manifest schema; that's the point of testing it now rather
-  than guessing further ahead.
+**Section 1 built — RFQ Browse/Search** (the app's landing page): a
+searchable/filterable table of real RFQs, classified as Detailed BOQ /
+Shallow / Lump-sum / No pricing data by actual `quotationline` structure
+(not the unreliable `DETAILBOQAVAILABLE` flag — see
+`databricks/FINDINGS.md`'s new "App implementation" section for the exact
+query and expected numbers). Sections are being built one at a time —
+later sections (RFQ detail with vendor/line-item comparison, award
+analysis, document metadata) aren't started yet.
+
+- `backend/main.py` — app factory, mounts `backend/api/rfqs.py`'s router;
+  keeps `/api/rfq-count` as a lightweight connectivity smoke test.
+- `backend/db.py` — the SQL warehouse connection helper.
+- `backend/boq_classification.py` — the BOQ-category cache + thresholds,
+  shared source of truth for any future section that needs it.
+- `frontend/` — Next.js + Tailwind v4 + shadcn/base-ui (ported from
+  `full-feature-buildout` for visual consistency — none of that branch's
+  comparison *logic* is reusable against real data, only its UI shell).
+- `start.sh` / `app.yaml` — Databricks Apps deployment plumbing, confirmed
+  working against a real deployment.
 
 ## Running locally
 

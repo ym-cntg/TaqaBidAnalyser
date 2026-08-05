@@ -618,3 +618,49 @@ clear next step once notebook 05 unblocks or in parallel with it.
 - ~~Can bid documents be retrieved via `docinfo`/`doclinks`, or is this
   metadata-only?~~ **Answered**: metadata only, from SQL. Real content
   needs separate file-share access (see above).
+
+---
+
+## App implementation: BOQ classification query (`backend/boq_classification.py`)
+
+The `maximo-integrated-buildout` app's RFQ Browse page classifies every RFQ
+by real `quotationline` detail rather than trusting `DETAILBOQAVAILABLE`
+(confirmed unreliable above). This is the exact query, checked in here as
+ground truth per its own verification plan:
+
+```sql
+WITH boq_stats AS (
+    SELECT RFQNUM, COUNT(*) / COUNT(DISTINCT VENDOR) AS avg_lines_per_vendor
+    FROM ingestion_framework_test.bid_data_exploration.quotationline
+    GROUP BY RFQNUM
+),
+invited AS (
+    SELECT RFQNUM, COUNT(DISTINCT VENDOR) AS invited_vendor_count
+    FROM ingestion_framework_test.bid_data_exploration.rfqvendor
+    GROUP BY RFQNUM
+)
+SELECT r.RFQNUM, r.ORGID,
+       COALESCE(inv.invited_vendor_count, 0) AS vendor_count,
+       bs.avg_lines_per_vendor
+FROM ingestion_framework_test.bid_data_exploration.rfq r
+LEFT JOIN boq_stats bs ON bs.RFQNUM = r.RFQNUM
+LEFT JOIN invited inv ON inv.RFQNUM = r.RFQNUM
+```
+
+Thresholds: no `boq_stats` row → `no_pricing_data`; `avg_lines_per_vendor <= 1`
+→ `lump_sum`; `<= 9` → `shallow`; else → `detailed_boq`.
+
+**Expected result across all 30,338 RFQs** (from the notebook 09 client
+walkthrough, first real run): Lump-sum 10,903 (35.9%, AED 62.8B recorded
+value — the highest-value bucket), Shallow 9,893 (32.6%, AED 28.2B),
+Detailed BOQ 3,289 (10.8%, AED 47.3B), No pricing data 6,253 (20.6%, AED
+48M). Sums to 30,338.
+
+**Known-value spot check**: `search=D-111808` on the app's `/api/rfqs`
+endpoint should return exactly one row — `boq_category = "lump_sum"`,
+`vendor_count = 22` (invited, from `rfqvendor` — not the 8 who actually
+priced), `total_award_value = 142459514.10`.
+
+If the app's live numbers diverge meaningfully from the percentages above,
+check the threshold boundaries first (`<=1`/`<=9`) before assuming the
+underlying data changed.

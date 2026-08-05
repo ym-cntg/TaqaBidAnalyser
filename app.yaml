@@ -1,14 +1,10 @@
 # Databricks Apps deployment manifest.
 #
-# NOT YET VERIFIED against a real deployment -- this is a best-effort
-# manifest based on documented Databricks Apps conventions, not something
-# that's been tested end-to-end. The whole point of this branch's first
-# step is to actually try deploying and fix whatever this gets wrong
-# (exact schema, env var names, whether a SQL warehouse resource needs to
-# be declared here vs. attached via the Apps UI, etc.) -- treat this file
-# as a starting point, not a confirmed-working config.
+# Schema/command format confirmed working -- deployed successfully as of
+# this commit. Unity Catalog connectivity still pending the warehouse and
+# schema grants for the app's service principal.
 command: ["bash", "start.sh"]
 
 env:
   - name: DATABRICKS_HTTP_PATH
-    value: ""  # fill in from the target SQL warehouse's "Connection details" tab
+    value: "/sql/1.0/warehouses/894ac035bea82a7f"  # test_sql_dbr

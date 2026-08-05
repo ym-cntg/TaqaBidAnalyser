@@ -31,7 +31,7 @@ assumptions about how Databricks Apps hosting/auth actually behaves.
 ```
 cp .env.example .env   # fill in DATABRICKS_SERVER_HOSTNAME, DATABRICKS_HTTP_PATH, DATABRICKS_TOKEN
 uv sync
-uv run uvicorn backend.main:app --reload --port 8000   # terminal 1
+uv run uvicorn backend.main:app --reload --port 8001   # terminal 1 -- must match frontend/next.config.ts's rewrite target
 cd frontend && npm install && npm run dev               # terminal 2
 ```
 

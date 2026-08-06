@@ -664,3 +664,20 @@ priced), `total_award_value = 142459514.10`.
 If the app's live numbers diverge meaningfully from the percentages above,
 check the threshold boundaries first (`<=1`/`<=9`) before assuming the
 underlying data changed.
+
+### Browse-list scope: only RFQs with a real BOQ (`MIN_BOQ_LINE_ITEMS = 10`)
+
+Product decision: the RFQ Browse page only ever loads RFQs with
+`avg_lines_per_vendor > 10` (strictly, so a value of exactly `10` is
+excluded) — lump-sum/shallow/no-pricing-data RFQs have no real line-item
+BOQ to compare, so they're dropped from the list entirely rather than left
+as a togglable filter. This is a hard floor applied on every request in
+`backend/api/rfqs.py`, not just the `boq_category` filter.
+
+**This changes the known-value spot check above**: D-111808 is `lump_sum`
+(one line per vendor), so it no longer appears in `/api/rfqs` at all under
+this floor — `search=D-111808` should now return zero rows. That's
+expected, not a bug. The floor is slightly stricter than the `detailed_boq`
+category boundary (`> 10` vs. `> 9`), so the in-scope count should be a bit
+below the 3,289 `detailed_boq` figure above — exact number not yet
+confirmed against the live warehouse.

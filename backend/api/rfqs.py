@@ -4,6 +4,11 @@ Real-schema notes (see databricks/FINDINGS.md): `rfq` spans 7 orgs across
 the whole legacy group, not just ADDC, so org_id defaults to ADDCORG here.
 TOTALAWVALUE is null on most rows (award totals often live at the vendor/
 line level instead) -- that's expected, not a bug.
+
+Only RFQs with more than MIN_BOQ_LINE_ITEMS line items per vendor are ever
+returned -- lump-sum/shallow/no-pricing-data RFQs have no real BOQ to
+compare, so they're dropped from this list entirely rather than exposed as
+a togglable filter.
 """
 
 from dataclasses import asdict, dataclass
@@ -13,6 +18,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from backend.boq_classification import (
     CATEGORIES,
+    MIN_BOQ_LINE_ITEMS,
     NO_PRICING_DATA,
     get_cache_loaded_at,
     get_classifications,
@@ -79,10 +85,18 @@ async def list_rfqs(
 
     org_scoped = org_id != "all"
 
-    # category_counts always reflects the org filter only, never search/category,
-    # so the frontend can render stable filter-option labels.
+    in_scope_rfqnums = {
+        c.rfqnum
+        for c in classifications.values()
+        if c.avg_lines_per_vendor is not None and c.avg_lines_per_vendor > MIN_BOQ_LINE_ITEMS
+    }
+
+    # category_counts always reflects the org + line-item floor only, never
+    # search/category, so the frontend can render stable filter-option labels.
     category_counts = {c: 0 for c in CATEGORIES}
     for c in classifications.values():
+        if c.rfqnum not in in_scope_rfqnums:
+            continue
         if org_scoped and c.org_id != org_id:
             continue
         category_counts[c.boq_category] += 1
@@ -96,25 +110,25 @@ async def list_rfqs(
             f"(RFQNUM ILIKE '%{escaped}%' ESCAPE '\\\\' "
             f"OR DESCRIPTION ILIKE '%{escaped}%' ESCAPE '\\\\')"
         )
+
+    eligible_rfqnums = in_scope_rfqnums
     if boq_category is not None:
-        matching_rfqnums = [
-            c.rfqnum
-            for c in classifications.values()
-            if c.boq_category == boq_category and (not org_scoped or c.org_id == org_id)
-        ]
-        if not matching_rfqnums:
-            return {
-                "rfqs": [],
-                "total_count": 0,
-                "page": page,
-                "page_size": page_size,
-                "category_counts": category_counts,
-                "boq_stats_updated_at": _iso(
-                    datetime.fromtimestamp(get_cache_loaded_at(), tz=timezone.utc)
-                ),
-            }
-        quoted = ", ".join(f"'{_escape_sql_literal(n)}'" for n in matching_rfqnums)
-        where_clauses.append(f"RFQNUM IN ({quoted})")
+        eligible_rfqnums = {
+            rfqnum for rfqnum in eligible_rfqnums if classifications[rfqnum].boq_category == boq_category
+        }
+    if not eligible_rfqnums:
+        return {
+            "rfqs": [],
+            "total_count": 0,
+            "page": page,
+            "page_size": page_size,
+            "category_counts": category_counts,
+            "boq_stats_updated_at": _iso(
+                datetime.fromtimestamp(get_cache_loaded_at(), tz=timezone.utc)
+            ),
+        }
+    quoted = ", ".join(f"'{_escape_sql_literal(n)}'" for n in eligible_rfqnums)
+    where_clauses.append(f"RFQNUM IN ({quoted})")
 
     where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 

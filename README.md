@@ -18,10 +18,13 @@ exposed port proxying `/api/*` to it).
 searchable/filterable table of real RFQs, classified as Detailed BOQ /
 Shallow / Lump-sum / No pricing data by actual `quotationline` structure
 (not the unreliable `DETAILBOQAVAILABLE` flag — see
-`databricks/FINDINGS.md`'s new "App implementation" section for the exact
-query and expected numbers). Sections are being built one at a time —
-later sections (RFQ detail with vendor/line-item comparison, award
-analysis, document metadata) aren't started yet.
+`databricks/FINDINGS.md`'s "App implementation" section for the exact
+query and expected numbers). The list only ever loads RFQs with **more
+than 10 BOQ line items per vendor** — lump-sum/shallow/no-pricing RFQs
+have no real BOQ to compare, so they're excluded outright, not just
+filterable. Sections are being built one at a time — later sections (RFQ
+detail with vendor/line-item comparison, award analysis, document
+metadata) aren't started yet.
 
 - `backend/main.py` — app factory, mounts `backend/api/rfqs.py`'s router;
   keeps `/api/rfq-count` as a lightweight connectivity smoke test.

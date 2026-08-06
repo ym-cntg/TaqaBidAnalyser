@@ -23,6 +23,10 @@ NO_PRICING_DATA = "no_pricing_data"
 
 CATEGORIES = (DETAILED_BOQ, SHALLOW, LUMP_SUM, NO_PRICING_DATA)
 
+# The browse list only ever loads RFQs with a real BOQ worth comparing --
+# more than this many line items per vendor. Applied in backend/api/rfqs.py.
+MIN_BOQ_LINE_ITEMS = 10
+
 
 @dataclass(frozen=True)
 class RfqClassification:
@@ -30,6 +34,7 @@ class RfqClassification:
     org_id: str | None
     boq_category: str
     vendor_count: int  # invited vendors, from rfqvendor -- not "priced"
+    avg_lines_per_vendor: float | None
 
 
 def _classify(avg_lines_per_vendor: float | None) -> str:
@@ -78,6 +83,7 @@ def _load_classifications() -> dict[str, RfqClassification]:
                     org_id=row.ORGID,
                     boq_category=_classify(row.avg_lines_per_vendor),
                     vendor_count=int(row.vendor_count),
+                    avg_lines_per_vendor=row.avg_lines_per_vendor,
                 )
     return result
 

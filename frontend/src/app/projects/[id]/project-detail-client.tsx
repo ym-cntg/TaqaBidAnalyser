@@ -9,14 +9,6 @@ import { ApiError, getProject, type ProjectSummary } from "@/lib/api";
 import { BOQ_CATEGORY_BADGE_VARIANT, BOQ_CATEGORY_LABELS } from "@/lib/boq-category";
 import { formatDate } from "@/lib/format";
 
-function friendlyDbError(message: string): string {
-  const lower = message.toLowerCase();
-  if (lower.includes("grant") || lower.includes("permission")) {
-    return "Projects aren't available yet — pending a Databricks admin grant.";
-  }
-  return message;
-}
-
 export function ProjectDetailClient({ projectId }: { projectId: string }) {
   const [project, setProject] = useState<ProjectSummary | null>(null);
   const [status, setStatus] = useState<"loading" | "ok" | "error" | "not-found">("loading");
@@ -55,7 +47,7 @@ export function ProjectDetailClient({ projectId }: { projectId: string }) {
 
         {status === "error" && (
           <div className="mt-4 rounded-lg border border-red-400/40 bg-red-500/5 p-4 text-sm text-red-600">
-            {friendlyDbError(error ?? "")}
+            {error}
           </div>
         )}
 

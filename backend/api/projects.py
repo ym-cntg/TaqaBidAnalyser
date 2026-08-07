@@ -188,7 +188,7 @@ async def create_project(body: ProjectCreateRequest):
         raise
     except Exception as exc:
         raise HTTPException(
-            status_code=503, detail=f"Could not create project (grant may not be applied yet): {exc}"
+            status_code=503, detail=f"Could not create project: {exc}"
         ) from exc
 
     rfq_headers = _fetch_rfq_headers({rfqnum})
@@ -212,6 +212,11 @@ async def list_projects(user_id: str | None = Query(None)):
     try:
         with get_connection() as conn:
             with conn.cursor() as cursor:
+                # Defensive, not just on the POST path: if nobody has ever
+                # created a project yet, the table itself doesn't exist,
+                # and without this the very first list load 503s instead
+                # of showing a clean empty state.
+                cursor.execute(_CREATE_TABLE_SQL)
                 cursor.execute(
                     f"SELECT project_id, user_id, name, rfqnum, created_at "
                     f"FROM {CATALOG}.{SCHEMA}.bid_analyzer_projects {where_sql} "
@@ -219,9 +224,7 @@ async def list_projects(user_id: str | None = Query(None)):
                 )
                 project_rows = cursor.fetchall()
     except Exception as exc:
-        raise HTTPException(
-            status_code=503, detail=f"Could not load projects (grant may not be applied yet): {exc}"
-        ) from exc
+        raise HTTPException(status_code=503, detail=f"Could not load projects: {exc}") from exc
 
     try:
         classifications = get_classifications()
@@ -254,6 +257,7 @@ async def get_project_detail(project_id: str):
     try:
         with get_connection() as conn:
             with conn.cursor() as cursor:
+                cursor.execute(_CREATE_TABLE_SQL)
                 cursor.execute(
                     f"SELECT project_id, user_id, name, rfqnum, created_at "
                     f"FROM {CATALOG}.{SCHEMA}.bid_analyzer_projects "
@@ -261,9 +265,7 @@ async def get_project_detail(project_id: str):
                 )
                 row = cursor.fetchone()
     except Exception as exc:
-        raise HTTPException(
-            status_code=503, detail=f"Could not load project (grant may not be applied yet): {exc}"
-        ) from exc
+        raise HTTPException(status_code=503, detail=f"Could not load project: {exc}") from exc
 
     if row is None:
         raise HTTPException(status_code=404, detail=f"Unknown project {project_id!r}")

@@ -135,5 +135,5 @@ async def identify(body: IdentifyRequest, request: Request):
         raise
     except Exception as exc:
         raise HTTPException(
-            status_code=503, detail=f"Could not identify user (grant may not be applied yet): {exc}"
+            status_code=503, detail=f"Could not identify user: {exc}"
         ) from exc

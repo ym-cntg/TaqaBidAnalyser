@@ -25,13 +25,12 @@ type IdentityState =
   | { status: "error"; error: string }
   | { status: "ready"; identity: CachedIdentity };
 
-function friendlyDbError(message: string): string {
-  const lower = message.toLowerCase();
-  if (lower.includes("grant") || lower.includes("permission")) {
-    return "Projects aren't available yet — pending a Databricks admin grant.";
-  }
-  return message;
-}
+// Deliberately no message-rewriting here -- always show the backend's
+// actual error text verbatim. An earlier version of this page pattern-
+// matched on the word "grant" to show a canned "pending an admin grant"
+// banner, but the backend's own error strings happened to contain that
+// word too, so real, unrelated errors got silently mislabeled. Never
+// hide the real cause behind a guess.
 
 export default function Home() {
   const router = useRouter();
@@ -107,7 +106,7 @@ export default function Home() {
       <main className="min-h-screen bg-app-gradient">
         <div className="mx-auto max-w-6xl px-6 py-8">
           <div className="rounded-lg border border-red-400/40 bg-red-500/5 p-4 text-sm text-red-600">
-            {friendlyDbError(identityState.error)}
+            {identityState.error}
           </div>
         </div>
       </main>
@@ -180,7 +179,7 @@ export default function Home() {
 
         {listStatus === "error" && (
           <div className="rounded-lg border border-red-400/40 bg-red-500/5 p-4 text-sm text-red-600">
-            {friendlyDbError(listError ?? "")}
+            {listError}
           </div>
         )}
 
@@ -262,7 +261,7 @@ function CreateProjectPanel({
       const project = await createProject({ name: name.trim(), rfqnum: selected.rfqnum, userId });
       onCreated(project);
     } catch (err) {
-      setError(err instanceof Error ? friendlyDbError(err.message) : String(err));
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setSubmitting(false);
     }

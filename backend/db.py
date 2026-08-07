@@ -10,6 +10,12 @@ CATALOG = "ingestion_framework_test"
 SCHEMA = "bid_data_exploration"
 
 
+def escape_sql_literal(value: str) -> str:
+    """Escapes a string for safe inclusion as a single-quoted SQL literal
+    (standard ANSI SQL: double up embedded single quotes)."""
+    return value.replace("'", "''")
+
+
 def get_connection():
     http_path = os.environ.get("DATABRICKS_HTTP_PATH")
     if not http_path:

@@ -23,19 +23,13 @@ from backend.boq_classification import (
     get_cache_loaded_at,
     get_classifications,
 )
-from backend.db import CATALOG, SCHEMA, get_connection
+from backend.db import CATALOG, SCHEMA, escape_sql_literal, get_connection
 
 router = APIRouter()
 
 DEFAULT_ORG_ID = "ADDCORG"
 DEFAULT_PAGE_SIZE = 50
 MAX_PAGE_SIZE = 200
-
-
-def _escape_sql_literal(value: str) -> str:
-    """Escapes a string for safe inclusion as a single-quoted SQL literal
-    (standard ANSI SQL: double up embedded single quotes)."""
-    return value.replace("'", "''")
 
 
 def _escape_like_pattern(value: str) -> str:
@@ -103,9 +97,9 @@ async def list_rfqs(
 
     where_clauses = []
     if org_scoped:
-        where_clauses.append(f"ORGID = '{_escape_sql_literal(org_id)}'")
+        where_clauses.append(f"ORGID = '{escape_sql_literal(org_id)}'")
     if search:
-        escaped = _escape_sql_literal(_escape_like_pattern(search))
+        escaped = escape_sql_literal(_escape_like_pattern(search))
         where_clauses.append(
             f"(RFQNUM ILIKE '%{escaped}%' ESCAPE '\\\\' "
             f"OR DESCRIPTION ILIKE '%{escaped}%' ESCAPE '\\\\')"
@@ -127,7 +121,7 @@ async def list_rfqs(
                 datetime.fromtimestamp(get_cache_loaded_at(), tz=timezone.utc)
             ),
         }
-    quoted = ", ".join(f"'{_escape_sql_literal(n)}'" for n in eligible_rfqnums)
+    quoted = ", ".join(f"'{escape_sql_literal(n)}'" for n in eligible_rfqnums)
     where_clauses.append(f"RFQNUM IN ({quoted})")
 
     where_sql = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""

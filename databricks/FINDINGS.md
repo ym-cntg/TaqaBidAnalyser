@@ -665,6 +665,47 @@ If the app's live numbers diverge meaningfully from the percentages above,
 check the threshold boundaries first (`<=1`/`<=9`) before assuming the
 underlying data changed.
 
+### App implementation: Projects (`backend/api/projects.py`, `backend/api/users.py`)
+
+A "Projects" landing page (now `/`) lets someone create a named project
+mapped to exactly one RFQ. This needed the app's **first-ever writes** to
+Unity Catalog, via two new app-owned Delta tables
+(`databricks/schema/bid_analyzer_projects.sql`,
+`bid_analyzer_users.sql`) in the same `bid_data_exploration` schema as the
+read-only Maximo tables.
+
+**Blocked pending a new admin grant**: the app's service principal
+currently has only `USE CATALOG`/`USE SCHEMA`/`SELECT` — no `CREATE
+TABLE`/`INSERT`/`UPDATE`. Until that's granted, `POST
+/api/users/identify` and `POST /api/projects` both 503 with the real
+Databricks permission error (not a crash) — this is the expected,
+directly-testable pre-grant state. The `CREATE TABLE IF NOT EXISTS`
+DDL runs lazily on those write paths (not on every `GET`), so once the
+grant lands, it self-heals with zero code changes and no restart.
+
+**Untested against the real warehouse** (no local write credentials in
+this session):
+- Whether either table's `CREATE TABLE IF NOT EXISTS` DDL succeeds as
+  written — this is the first DDL ever run from this codebase.
+- Whether the manually-built `TIMESTAMP 'yyyy-MM-dd HH:mm:ss.ffffff'`
+  literal used in both `INSERT`s is accepted by this warehouse via
+  `databricks-sql-connector`.
+- **Whether Databricks Apps forwards a signed-in user's identity via any
+  request header** (`X-Forwarded-Email`/`X-Forwarded-Preferred-Username`/
+  `X-Forwarded-User`, checked in that order by `backend/api/users.py`) —
+  never confirmed anywhere in this codebase. If none of these fire, every
+  user falls back to a self-reported display name cached in
+  `localStorage`, which still works fully, just less seamlessly. Worth
+  checking directly after deploy (a temporary log line on the first
+  request would settle it).
+
+Once the grant lands, the known-value spot check for this feature is:
+create a project against `N-19535` (real, `detailed_boq`, 9 invited
+vendors, description "400kV OHL Works for Haffar, ICAD4 & ICAD5 (SASN
+Retirement)") and confirm `POST /api/projects` returns that description/
+status/org/category/vendor_count enrichment correctly, then confirm `GET
+/api/projects?user_id=...` and `GET /api/projects/{id}` both reflect it.
+
 ### Browse-list scope: only RFQs with a real BOQ (`MIN_BOQ_LINE_ITEMS = 10`)
 
 Product decision: the RFQ Browse page only ever loads RFQs with

@@ -1,202 +1,334 @@
 "use client";
 
+import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
-import { getRfqs, type BoqCategory, type RfqListResponse } from "@/lib/api";
-import { BOQ_CATEGORY_BADGE_VARIANT, BOQ_CATEGORY_LABELS, BOQ_CATEGORY_ORDER } from "@/lib/boq-category";
-import { formatAED, formatDate } from "@/lib/format";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  ApiError,
+  createProject,
+  getProjects,
+  getRfqs,
+  type ProjectSummary,
+  type RfqSummary,
+} from "@/lib/api";
+import { BOQ_CATEGORY_BADGE_VARIANT, BOQ_CATEGORY_LABELS } from "@/lib/boq-category";
+import { formatDate } from "@/lib/format";
+import { clearCachedIdentity, resolveIdentity, type CachedIdentity } from "@/lib/identity";
 
-const ORG_OPTIONS: { value: string; label: string }[] = [
-  { value: "ADDCORG", label: "ADDC" },
-  { value: "TRANSORG", label: "TRANS" },
-  { value: "AADCORG", label: "AADC" },
-  { value: "ADWEAORG", label: "ADWEA" },
-  { value: "AMPCORG", label: "AMPC" },
-  { value: "ADSSCORG", label: "ADSSC" },
-  { value: "BPCORG", label: "BPC" },
-  { value: "all", label: "All organizations" },
-];
+type IdentityState =
+  | { status: "resolving" }
+  | { status: "needs-name"; error?: string }
+  | { status: "error"; error: string }
+  | { status: "ready"; identity: CachedIdentity };
 
-const PAGE_SIZE = 50;
+function friendlyDbError(message: string): string {
+  const lower = message.toLowerCase();
+  if (lower.includes("grant") || lower.includes("permission")) {
+    return "Projects aren't available yet — pending a Databricks admin grant.";
+  }
+  return message;
+}
 
 export default function Home() {
-  const [searchInput, setSearchInput] = useState("");
-  const [search, setSearch] = useState("");
-  const [orgId, setOrgId] = useState("ADDCORG");
-  const [boqCategory, setBoqCategory] = useState<BoqCategory | "">("");
-  const [page, setPage] = useState(1);
+  const router = useRouter();
+  const [identityState, setIdentityState] = useState<IdentityState>({ status: "resolving" });
+  const [nameInput, setNameInput] = useState("");
 
-  const [data, setData] = useState<RfqListResponse | null>(null);
-  const [status, setStatus] = useState<"loading" | "ok" | "error">("loading");
-  const [error, setError] = useState<string | null>(null);
+  const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
+  const [listStatus, setListStatus] = useState<"loading" | "ok" | "error">("loading");
+  const [listError, setListError] = useState<string | null>(null);
 
-  // Debounce the search box -- avoid firing a request on every keystroke.
+  const [panelOpen, setPanelOpen] = useState(false);
+
+  function tryResolveIdentity(displayName?: string) {
+    resolveIdentity(displayName)
+      .then((identity) => setIdentityState({ status: "ready", identity }))
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === 400) {
+          setIdentityState({ status: "needs-name" });
+        } else {
+          setIdentityState({
+            status: "error",
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      });
+  }
+
   useEffect(() => {
-    const t = setTimeout(() => {
-      setSearch(searchInput);
-      setPage(1);
-    }, 300);
-    return () => clearTimeout(t);
-  }, [searchInput]);
+    tryResolveIdentity();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
-    setStatus("loading");
-    setError(null);
-    getRfqs({
-      search: search || undefined,
-      orgId,
-      boqCategory: boqCategory || undefined,
-      page,
-      pageSize: PAGE_SIZE,
-    })
+    if (identityState.status !== "ready") return;
+    setListStatus("loading");
+    setListError(null);
+    getProjects(identityState.identity.userId)
       .then((res) => {
-        setData(res);
-        setStatus("ok");
+        setProjects(res.projects);
+        setListStatus("ok");
       })
       .catch((err) => {
-        setError(err instanceof Error ? err.message : String(err));
-        setStatus("error");
+        setListError(err instanceof Error ? err.message : String(err));
+        setListStatus("error");
       });
-  }, [search, orgId, boqCategory, page]);
+  }, [identityState]);
 
-  const totalPages = data ? Math.max(1, Math.ceil(data.total_count / data.page_size)) : 1;
+  function submitName(e: React.FormEvent) {
+    e.preventDefault();
+    if (!nameInput.trim()) return;
+    tryResolveIdentity(nameInput.trim());
+  }
+
+  function switchUser() {
+    clearCachedIdentity();
+    setProjects(null);
+    setIdentityState({ status: "resolving" });
+    tryResolveIdentity();
+  }
+
+  if (identityState.status === "resolving") {
+    return (
+      <main className="min-h-screen bg-app-gradient">
+        <div className="mx-auto max-w-6xl px-6 py-8">
+          <p className="text-center py-12 text-muted-foreground animate-pulse">Loading…</p>
+        </div>
+      </main>
+    );
+  }
+
+  if (identityState.status === "error") {
+    return (
+      <main className="min-h-screen bg-app-gradient">
+        <div className="mx-auto max-w-6xl px-6 py-8">
+          <div className="rounded-lg border border-red-400/40 bg-red-500/5 p-4 text-sm text-red-600">
+            {friendlyDbError(identityState.error)}
+          </div>
+        </div>
+      </main>
+    );
+  }
+
+  if (identityState.status === "needs-name") {
+    return (
+      <main className="min-h-screen bg-app-gradient">
+        <div className="mx-auto max-w-md px-6 py-16">
+          <Card>
+            <CardHeader>
+              <CardTitle>What should we call you?</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <form onSubmit={submitName} className="flex flex-col gap-3">
+                <input
+                  autoFocus
+                  type="text"
+                  value={nameInput}
+                  onChange={(e) => setNameInput(e.target.value)}
+                  placeholder="Your name"
+                  className="h-8 rounded-lg border border-border bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+                />
+                <Button type="submit">Continue</Button>
+              </form>
+            </CardContent>
+          </Card>
+        </div>
+      </main>
+    );
+  }
+
+  const identity = identityState.identity;
 
   return (
     <main className="min-h-screen bg-app-gradient">
       <div className="mx-auto max-w-6xl px-6 py-8">
-        <header className="mb-6">
-          <h1 className="text-xl font-semibold">TAQA Bid Analyzer — Maximo</h1>
-          <p className="text-sm text-muted-foreground mt-1">
-            Search and filter ADDC procurement tenders from Maximo.
-          </p>
+        <header className="mb-6 flex items-start justify-between">
+          <div>
+            <h1 className="text-xl font-semibold">Projects</h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              Each project tracks the analysis for one RFQ.
+            </p>
+          </div>
+          <div className="text-right">
+            <p className="text-sm">{identity.displayName}</p>
+            <button
+              onClick={switchUser}
+              className="text-xs text-muted-foreground underline hover:text-foreground"
+            >
+              switch user
+            </button>
+          </div>
         </header>
 
-        <div className="flex flex-wrap gap-3 mb-4 rounded-xl border border-border/60 bg-card p-4">
-          <input
-            type="text"
-            value={searchInput}
-            onChange={(e) => setSearchInput(e.target.value)}
-            placeholder="Search RFQ number or description…"
-            className="flex-1 min-w-[240px] h-8 rounded-lg border border-border bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-          />
-          <select
-            value={orgId}
-            onChange={(e) => {
-              setOrgId(e.target.value);
-              setPage(1);
-            }}
-            className="h-8 rounded-lg border border-border bg-background px-2 text-sm"
-          >
-            {ORG_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-          <select
-            value={boqCategory}
-            onChange={(e) => {
-              setBoqCategory(e.target.value as BoqCategory | "");
-              setPage(1);
-            }}
-            className="h-8 rounded-lg border border-border bg-background px-2 text-sm"
-          >
-            <option value="">All categories</option>
-            {BOQ_CATEGORY_ORDER.map((c) => (
-              <option key={c} value={c}>
-                {BOQ_CATEGORY_LABELS[c]}
-                {data ? ` (${data.category_counts[c].toLocaleString()})` : ""}
-              </option>
-            ))}
-          </select>
+        <div className="mb-6">
+          <Button onClick={() => setPanelOpen((v) => !v)}>{panelOpen ? "Cancel" : "New project"}</Button>
+          {panelOpen && (
+            <CreateProjectPanel
+              userId={identity.userId}
+              onCreated={(project) => router.push(`/projects/${project.project_id}`)}
+            />
+          )}
         </div>
 
-        {status === "loading" && (
-          <p className="text-center py-12 text-muted-foreground animate-pulse">Loading RFQs…</p>
+        {listStatus === "loading" && (
+          <p className="text-center py-12 text-muted-foreground animate-pulse">Loading projects…</p>
         )}
 
-        {status === "error" && (
+        {listStatus === "error" && (
           <div className="rounded-lg border border-red-400/40 bg-red-500/5 p-4 text-sm text-red-600">
-            {error}
+            {friendlyDbError(listError ?? "")}
           </div>
         )}
 
-        {status === "ok" && data && (
+        {listStatus === "ok" && projects && (
           <>
-            <p className="text-sm text-muted-foreground mb-2">
-              Showing {data.rfqs.length === 0 ? 0 : (data.page - 1) * data.page_size + 1}–
-              {(data.page - 1) * data.page_size + data.rfqs.length} of{" "}
-              {data.total_count.toLocaleString()} RFQs
-            </p>
-
-            {data.rfqs.length === 0 ? (
-              <p className="text-center py-12 text-muted-foreground">No RFQs match your filters.</p>
+            {projects.length === 0 ? (
+              <p className="text-center py-12 text-muted-foreground">
+                No projects yet — create one to get started.
+              </p>
             ) : (
-              <div className="overflow-x-auto rounded-xl border border-border/60">
-                <table className="w-full text-sm">
-                  <thead className="sticky top-0 bg-muted/90 backdrop-blur">
-                    <tr className="border-b border-border/60 text-left">
-                      <th className="px-3 py-2 font-medium">RFQNUM</th>
-                      <th className="px-3 py-2 font-medium">Description</th>
-                      <th className="px-3 py-2 font-medium">Status</th>
-                      <th className="px-3 py-2 font-medium">Org</th>
-                      <th className="px-3 py-2 font-medium">Entered</th>
-                      <th className="px-3 py-2 font-medium text-right">Award Value</th>
-                      <th className="px-3 py-2 font-medium">BOQ Category</th>
-                      <th className="px-3 py-2 font-medium text-right">Vendors</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {data.rfqs.map((rfq) => (
-                      <tr key={rfq.rfqnum} className="odd:bg-muted/[0.15] border-b border-border/40 last:border-0">
-                        <td className="px-3 py-2 font-mono text-xs whitespace-nowrap">{rfq.rfqnum}</td>
-                        <td className="px-3 py-2 max-w-[360px] truncate" title={rfq.description ?? ""}>
-                          {rfq.description ?? "—"}
-                        </td>
-                        <td className="px-3 py-2">
-                          <Badge variant="outline">{rfq.status ?? "—"}</Badge>
-                        </td>
-                        <td className="px-3 py-2 whitespace-nowrap">
-                          {ORG_OPTIONS.find((o) => o.value === rfq.org_id)?.label ?? rfq.org_id ?? "—"}
-                        </td>
-                        <td className="px-3 py-2 whitespace-nowrap">{formatDate(rfq.enter_date)}</td>
-                        <td className="px-3 py-2 text-right whitespace-nowrap">{formatAED(rfq.total_award_value)}</td>
-                        <td className="px-3 py-2">
-                          <Badge variant={BOQ_CATEGORY_BADGE_VARIANT[rfq.boq_category]}>
-                            {BOQ_CATEGORY_LABELS[rfq.boq_category]}
-                          </Badge>
-                        </td>
-                        <td className="px-3 py-2 text-right">{rfq.vendor_count}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {projects.map((p) => (
+                  <Link key={p.project_id} href={`/projects/${p.project_id}`}>
+                    <Card className="h-full cursor-pointer transition-shadow hover:shadow-md">
+                      <CardHeader>
+                        <CardTitle>{p.name}</CardTitle>
+                      </CardHeader>
+                      <CardContent className="flex flex-col gap-2">
+                        <p className="font-mono text-xs text-muted-foreground">{p.rfqnum}</p>
+                        <p className="truncate text-sm" title={p.rfq_description ?? ""}>
+                          {p.rfq_description ?? "—"}
+                        </p>
+                        <div className="flex flex-wrap items-center gap-2">
+                          {p.boq_category && (
+                            <Badge variant={BOQ_CATEGORY_BADGE_VARIANT[p.boq_category]}>
+                              {BOQ_CATEGORY_LABELS[p.boq_category]}
+                            </Badge>
+                          )}
+                          <span className="text-xs text-muted-foreground">{formatDate(p.created_at)}</span>
+                        </div>
+                      </CardContent>
+                    </Card>
+                  </Link>
+                ))}
               </div>
             )}
-
-            <div className="flex items-center justify-between mt-4">
-              <button
-                onClick={() => setPage((p) => Math.max(1, p - 1))}
-                disabled={data.page <= 1}
-                className="h-8 rounded-lg border border-border bg-background px-3 text-sm disabled:opacity-50 disabled:pointer-events-none hover:bg-muted"
-              >
-                Prev
-              </button>
-              <span className="text-sm text-muted-foreground">
-                Page {data.page} of {totalPages}
-              </span>
-              <button
-                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                disabled={data.page >= totalPages}
-                className="h-8 rounded-lg border border-border bg-background px-3 text-sm disabled:opacity-50 disabled:pointer-events-none hover:bg-muted"
-              >
-                Next
-              </button>
-            </div>
           </>
         )}
       </div>
     </main>
+  );
+}
+
+function CreateProjectPanel({
+  userId,
+  onCreated,
+}: {
+  userId: string;
+  onCreated: (project: ProjectSummary) => void;
+}) {
+  const [name, setName] = useState("");
+  const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [results, setResults] = useState<RfqSummary[]>([]);
+  const [selected, setSelected] = useState<RfqSummary | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  useEffect(() => {
+    if (!debouncedSearch) {
+      setResults([]);
+      return;
+    }
+    getRfqs({ search: debouncedSearch, orgId: "all", pageSize: 10 })
+      .then((res) => setResults(res.rfqs))
+      .catch(() => setResults([]));
+  }, [debouncedSearch]);
+
+  async function submit() {
+    if (!name.trim() || !selected) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const project = await createProject({ name: name.trim(), rfqnum: selected.rfqnum, userId });
+      onCreated(project);
+    } catch (err) {
+      setError(err instanceof Error ? friendlyDbError(err.message) : String(err));
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <Card className="mt-4 max-w-xl">
+      <CardHeader>
+        <CardTitle>New project</CardTitle>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-3">
+        <input
+          type="text"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="Project name"
+          className="h-8 rounded-lg border border-border bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+        />
+
+        {selected ? (
+          <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-2.5 py-1.5 text-sm">
+            <span>
+              <span className="font-mono text-xs">{selected.rfqnum}</span> — {selected.description ?? "—"}
+            </span>
+            <button
+              onClick={() => setSelected(null)}
+              className="text-xs text-muted-foreground hover:text-foreground"
+            >
+              change
+            </button>
+          </div>
+        ) : (
+          <>
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search RFQ number or description…"
+              className="h-8 rounded-lg border border-border bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+            />
+            {results.length > 0 && (
+              <div className="max-h-48 overflow-y-auto rounded-lg border border-border">
+                {results.map((r) => (
+                  <button
+                    key={r.rfqnum}
+                    onClick={() => {
+                      setSelected(r);
+                      setResults([]);
+                      setSearch("");
+                    }}
+                    className="block w-full border-b border-border/40 px-2.5 py-1.5 text-left text-sm last:border-0 hover:bg-muted"
+                  >
+                    <span className="font-mono text-xs">{r.rfqnum}</span> — {r.description ?? "—"}
+                  </button>
+                ))}
+              </div>
+            )}
+          </>
+        )}
+
+        {error && <p className="text-sm text-red-600">{error}</p>}
+
+        <Button onClick={submit} disabled={!name.trim() || !selected || submitting}>
+          {submitting ? "Creating…" : "Create"}
+        </Button>
+      </CardContent>
+    </Card>
   );
 }

@@ -766,6 +766,40 @@ as columns (only ones with ≥1 `quotationline` row — recall 4 of 9 actually
 submitted per that section), and 2,480 total lines (`total_line_count`,
 truncated to the first 500 returned).
 
+### Flagship demo example: N-19281 (high fill rate) — and a real duplicate-row finding
+
+Went looking for a real RFQ where most/all vendors priced most/all lines
+— a clean demo of the comparison feature with few unquoted cells. Query:
+group `quotationline` (excluding `ORDERUNIT = 'HEADER'`) by `RFQNUM`,
+compute `fill_rate = total_priced_rows / (total_lines * num_vendors)`;
+1.0 means every submitting vendor priced every line.
+
+**New finding, real and unexpected**: several RFQs (`A-1233`, `A1450`,
+`A1474`, `N1658`, `G-01-0070.1`, `A1591`) came back with `fill_rate > 1.0`
+— only possible if a vendor has **multiple `quotationline` rows for the
+same `RFQLINENUM`**. This means the "zero duplicate `(RFQLINENUM,
+VENDOR)` pairs" claim in the `RFQLINENUM` section above was only ever
+confirmed on the one example tested (`N-19535`) — **not a general rule**.
+`backend/api/comparison.py` doesn't handle this case: its `by_vendor =
+{r.VENDOR: r for r in line_rows}` dict construction silently keeps
+whichever duplicate row comes last and drops the rest, no warning. Do not
+use any of the RFQs above for a demo until that's fixed — the table would
+render looking clean while quietly showing incomplete data.
+
+**Chosen example: `N-19281`** — 368 real BOQ lines, 9 submitting vendors,
+exact `fill_rate = 1.0` (3,312 = 368 × 9, no duplicate-row anomaly).
+Comfortably under `comparison.py`'s `LINES_CAP = 500`, so it renders
+complete, no truncation. Runner-up: `N-14516.1` (293 lines, 10 vendors,
+exact fill) if more bidder columns is preferred over more lines.
+
+Every genuinely large detailed BOQ found with exact `fill_rate = 1.0`
+(`N-19899`, `N-20585`, `N-18530`, etc. — thousands of lines each) is well
+past the 500-line cap and would show truncated. The smallest *exact-fill*
+RFQs found (9–11 real lines, e.g. `N-20221.1`, `M4817`, `D19890405`) are
+real but too thin to read as a substantial procurement in a demo — they
+just barely clear the `MIN_BOQ_LINE_ITEMS` threshold. `N-19281` sits in
+the useful middle ground between those two extremes.
+
 ### Browse-list scope: only RFQs with a real BOQ (`MIN_BOQ_LINE_ITEMS = 10`)
 
 Product decision: the RFQ Browse page only ever loads RFQs with

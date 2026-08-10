@@ -6,17 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { getRfqs, type BoqCategory, type RfqListResponse } from "@/lib/api";
 import { BOQ_CATEGORY_BADGE_VARIANT, BOQ_CATEGORY_LABELS, BOQ_CATEGORY_ORDER } from "@/lib/boq-category";
 import { formatAED, formatDate } from "@/lib/format";
-
-const ORG_OPTIONS: { value: string; label: string }[] = [
-  { value: "ADDCORG", label: "ADDC" },
-  { value: "TRANSORG", label: "TRANS" },
-  { value: "AADCORG", label: "AADC" },
-  { value: "ADWEAORG", label: "ADWEA" },
-  { value: "AMPCORG", label: "AMPC" },
-  { value: "ADSSCORG", label: "ADSSC" },
-  { value: "BPCORG", label: "BPC" },
-  { value: "all", label: "All organizations" },
-];
+import { ORG_OPTIONS } from "@/lib/orgs";
 
 const PAGE_SIZE = 50;
 

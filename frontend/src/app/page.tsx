@@ -18,6 +18,7 @@ import {
 import { BOQ_CATEGORY_BADGE_VARIANT, BOQ_CATEGORY_LABELS } from "@/lib/boq-category";
 import { formatDate } from "@/lib/format";
 import { clearCachedIdentity, resolveIdentity, type CachedIdentity } from "@/lib/identity";
+import { ORG_OPTIONS } from "@/lib/orgs";
 
 type IdentityState =
   | { status: "resolving" }
@@ -223,6 +224,8 @@ export default function Home() {
   );
 }
 
+const RFQ_PICKER_PAGE_SIZE = 20;
+
 function CreateProjectPanel({
   userId,
   onCreated,
@@ -233,25 +236,34 @@ function CreateProjectPanel({
   const [name, setName] = useState("");
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
-  const [results, setResults] = useState<RfqSummary[]>([]);
+  const [orgId, setOrgId] = useState("ADDCORG");
   const [selected, setSelected] = useState<RfqSummary | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [results, setResults] = useState<RfqSummary[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [rfqStatus, setRfqStatus] = useState<"loading" | "ok" | "error">("loading");
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300);
     return () => clearTimeout(t);
   }, [search]);
 
+  // Populated immediately on open (no search needed) so this reads as a
+  // browsable list, same as the /rfqs page -- not a blind text field that
+  // only reacts once you happen to type something that matches.
   useEffect(() => {
-    if (!debouncedSearch) {
-      setResults([]);
-      return;
-    }
-    getRfqs({ search: debouncedSearch, orgId: "all", pageSize: 10 })
-      .then((res) => setResults(res.rfqs))
-      .catch(() => setResults([]));
-  }, [debouncedSearch]);
+    if (selected) return;
+    setRfqStatus("loading");
+    getRfqs({ search: debouncedSearch || undefined, orgId, pageSize: RFQ_PICKER_PAGE_SIZE })
+      .then((res) => {
+        setResults(res.rfqs);
+        setTotalCount(res.total_count);
+        setRfqStatus("ok");
+      })
+      .catch(() => setRfqStatus("error"));
+  }, [debouncedSearch, orgId, selected]);
 
   async function submit() {
     if (!name.trim() || !selected) return;
@@ -268,7 +280,7 @@ function CreateProjectPanel({
   }
 
   return (
-    <Card className="mt-4 max-w-xl">
+    <Card className="mt-4 max-w-2xl">
       <CardHeader>
         <CardTitle>New project</CardTitle>
       </CardHeader>
@@ -283,41 +295,87 @@ function CreateProjectPanel({
 
         {selected ? (
           <div className="flex items-center justify-between rounded-lg border border-border bg-muted/30 px-2.5 py-1.5 text-sm">
-            <span>
-              <span className="font-mono text-xs">{selected.rfqnum}</span> — {selected.description ?? "—"}
+            <span className="flex items-center gap-2">
+              <span className="font-mono text-xs">{selected.rfqnum}</span>
+              <span className="truncate">{selected.description ?? "—"}</span>
+              <Badge variant={BOQ_CATEGORY_BADGE_VARIANT[selected.boq_category]}>
+                {BOQ_CATEGORY_LABELS[selected.boq_category]}
+              </Badge>
             </span>
             <button
               onClick={() => setSelected(null)}
-              className="text-xs text-muted-foreground hover:text-foreground"
+              className="shrink-0 text-xs text-muted-foreground hover:text-foreground"
             >
               change
             </button>
           </div>
         ) : (
           <>
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search RFQ number or description…"
-              className="h-8 rounded-lg border border-border bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-            />
-            {results.length > 0 && (
-              <div className="max-h-48 overflow-y-auto rounded-lg border border-border">
-                {results.map((r) => (
-                  <button
-                    key={r.rfqnum}
-                    onClick={() => {
-                      setSelected(r);
-                      setResults([]);
-                      setSearch("");
-                    }}
-                    className="block w-full border-b border-border/40 px-2.5 py-1.5 text-left text-sm last:border-0 hover:bg-muted"
-                  >
-                    <span className="font-mono text-xs">{r.rfqnum}</span> — {r.description ?? "—"}
-                  </button>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search RFQ number or description…"
+                className="h-8 min-w-0 flex-1 rounded-lg border border-border bg-background px-2.5 text-sm outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+              />
+              <select
+                value={orgId}
+                onChange={(e) => setOrgId(e.target.value)}
+                className="h-8 rounded-lg border border-border bg-background px-2 text-sm"
+              >
+                {ORG_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
                 ))}
+              </select>
+            </div>
+
+            {rfqStatus === "loading" && (
+              <p className="py-4 text-center text-sm text-muted-foreground animate-pulse">Loading RFQs…</p>
+            )}
+            {rfqStatus === "error" && (
+              <p className="py-4 text-center text-sm text-red-600">Could not load RFQs.</p>
+            )}
+            {rfqStatus === "ok" && results.length === 0 && (
+              <p className="py-4 text-center text-sm text-muted-foreground">No RFQs match.</p>
+            )}
+            {rfqStatus === "ok" && results.length > 0 && (
+              <div className="max-h-64 overflow-y-auto rounded-lg border border-border">
+                <table className="w-full text-sm">
+                  <tbody>
+                    {results.map((r) => (
+                      <tr
+                        key={r.rfqnum}
+                        onClick={() => {
+                          setSelected(r);
+                          setSearch("");
+                        }}
+                        className="cursor-pointer border-b border-border/40 odd:bg-muted/[0.15] last:border-0 hover:bg-muted"
+                      >
+                        <td className="whitespace-nowrap px-2.5 py-1.5 font-mono text-xs">{r.rfqnum}</td>
+                        <td className="max-w-[260px] truncate px-2.5 py-1.5" title={r.description ?? ""}>
+                          {r.description ?? "—"}
+                        </td>
+                        <td className="whitespace-nowrap px-2.5 py-1.5">
+                          <Badge variant={BOQ_CATEGORY_BADGE_VARIANT[r.boq_category]}>
+                            {BOQ_CATEGORY_LABELS[r.boq_category]}
+                          </Badge>
+                        </td>
+                        <td className="whitespace-nowrap px-2.5 py-1.5 text-right text-xs text-muted-foreground">
+                          {r.vendor_count} vendors
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
+            )}
+            {rfqStatus === "ok" && totalCount > results.length && (
+              <p className="text-xs text-muted-foreground">
+                Showing {results.length} of {totalCount.toLocaleString()} — narrow your search to find more.
+              </p>
             )}
           </>
         )}

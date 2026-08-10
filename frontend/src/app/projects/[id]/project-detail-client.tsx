@@ -8,6 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { ApiError, getProject, type ProjectSummary } from "@/lib/api";
 import { BOQ_CATEGORY_BADGE_VARIANT, BOQ_CATEGORY_LABELS } from "@/lib/boq-category";
 import { formatDate } from "@/lib/format";
+import { RfqComparison } from "./rfq-comparison";
 
 export function ProjectDetailClient({ projectId }: { projectId: string }) {
   const [project, setProject] = useState<ProjectSummary | null>(null);
@@ -85,11 +86,7 @@ export function ProjectDetailClient({ projectId }: { projectId: string }) {
               </CardContent>
             </Card>
 
-            <Card>
-              <CardContent className="py-6 text-center text-sm text-muted-foreground">
-                Coming soon: BOQ line-item comparison
-              </CardContent>
-            </Card>
+            <RfqComparison rfqnum={project.rfqnum} />
           </div>
         )}
       </div>

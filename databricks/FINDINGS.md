@@ -706,6 +706,66 @@ Retirement)") and confirm `POST /api/projects` returns that description/
 status/org/category/vendor_count enrichment correctly, then confirm `GET
 /api/projects?user_id=...` and `GET /api/projects/{id}` both reflect it.
 
+### App implementation: BOQ line-item comparison (`backend/api/comparison.py`)
+
+**New fact from the user, resolving a long-open gap**: vendor names ARE
+resolvable — `SELECT name FROM companies WHERE company = rfqvendor.vendor`.
+This directly answers the `rfqvendor` section's "vendor names aren't in
+this dataset at all" finding above. Assumed fully-qualified as
+`ingestion_framework_test.bid_data_exploration.companies` (same schema as
+everything else) — **UNVERIFIED**, first real use of this table in this
+codebase. If `GET /api/rfqs/{rfqnum}/comparison` 503s with something
+`TABLE_OR_VIEW_NOT_FOUND`-shaped, check this table's real location first.
+
+**"Round 1" scope, deliberately minimal**: this comparison uses
+`quotationline.UNITCOST`/`LINECOST` only — the original quote. As already
+documented above, `quotationline` has no round-number or change-timestamp
+column, only an original-vs-final snapshot (`LINECOST` vs
+`LINECOSTWDIS`), so there is no queryable per-round history to compare
+against. This is a deliberate, data-driven scope cut, not a placeholder.
+
+**No lot rollup**: confirmed above that no lot column/structure exists
+anywhere in the real schema, so this feature computes **contract totals
+only** (`SUM(LINECOST)` per vendor across all their lines) — no lot-level
+subtotal, since lots aren't modeled in Maximo's structured tables.
+
+**Query approach** (three reads, no writes — independent of the Projects
+write-grant status):
+1. `rfqvendor` LEFT JOIN `companies` (`companies.company = rfqvendor.VENDOR`)
+   → the invited-vendor roster + resolved names.
+2. `quotationline` filtered to `RFQNUM` and `ORDERUNIT <> 'HEADER'` (or
+   null) — excludes non-priced section-break rows, keeping only real BOQ
+   line items.
+3. Shaping (canonical line list, per-vendor pricing grid, flag
+   computation) happens in Python, not SQL — consistent with this
+   codebase's existing preference for verifiable logic over unverified
+   warehouse-specific SQL (e.g. no `MEDIAN()` aggregate relied on).
+
+**Flag definitions** (first-pass thresholds, tune later against real data —
+this is the most likely thing to need iteration):
+- **Unquoted**: a vendor has no `quotationline` row for a given
+  `RFQLINENUM`, or has one with a null `UNITCOST`.
+- **Arithmetic error**: `abs(LINECOST - ORDERQTY * UNITCOST) > 0.01`.
+- **Outlier**: only computed when ≥3 vendors quoted a line (fewer isn't a
+  meaningful sample) — `abs(UNITCOST - median_of_quotes) / median > 0.5`.
+- **Did not submit** (distinct from "unquoted"): an invited vendor
+  (present in `rfqvendor`) with zero `quotationline` rows for the whole
+  RFQ at all — listed separately from the comparison table's vendor
+  columns, not rendered as an all-empty column.
+
+**Size safety**: real BOQs go up to 52k lines (documented above). Returned
+`lines` are capped at 500 (`LINES_CAP` in `comparison.py`) with
+`truncated`/`total_line_count` in the response — a flat `LIMIT`, not real
+pagination. Vendor contract totals and flag counts are always computed
+over the *full* line set, never just the returned/truncated page.
+
+**Known-value spot check** once deployed: `GET
+/api/rfqs/N-19535/comparison` should return 9 invited vendors in
+`rfqvendor` (per the "Notebooks 07/08" section above), a subset of those
+as columns (only ones with ≥1 `quotationline` row — recall 4 of 9 actually
+submitted per that section), and 2,480 total lines (`total_line_count`,
+truncated to the first 500 returned).
+
 ### Browse-list scope: only RFQs with a real BOQ (`MIN_BOQ_LINE_ITEMS = 10`)
 
 Product decision: the RFQ Browse page only ever loads RFQs with

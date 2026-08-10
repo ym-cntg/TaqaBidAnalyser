@@ -35,11 +35,24 @@ auth: a forwarded Databricks Apps identity header is tried first
 (**unverified whether this platform sends one**), falling back to a
 self-reported name cached in the browser (`bid_analyzer_users.sql`). See
 the "App implementation" section of `databricks/FINDINGS.md` for details.
-Sections are being built one at a time — the actual BOQ line-item
-comparison a project opens into isn't started yet.
 
-- `backend/main.py` — app factory, mounts `rfqs`/`users`/`projects`
-  routers; keeps `/api/rfq-count` as a lightweight connectivity smoke test.
+**BOQ line-item comparison built**, on the project detail page: side-by-
+side bidder pricing per BOQ line (lowest price per line highlighted),
+plus automated commercial flags (unquoted items, arithmetic errors, price
+outliers, bidders who didn't submit at all). Deliberately **round-1
+scope only** — uses `quotationline`'s original quote
+(`UNITCOST`/`LINECOST`), since the real data has no queryable round-by-
+round history, and **no lot rollup** — just contract totals — since lots
+aren't modeled anywhere in the real schema. Vendor names are now
+resolvable via a `companies` table (`companies.company = rfqvendor.VENDOR`)
+— unverified fully-qualified location, first real use of this table. Pure
+read, so it works independent of the Projects write-grant status. See
+`databricks/FINDINGS.md`'s "App implementation" section for flag
+thresholds and the known-value spot check.
+
+- `backend/main.py` — app factory, mounts `rfqs`/`users`/`projects`/
+  `comparison` routers; keeps `/api/rfq-count` as a lightweight
+  connectivity smoke test.
 - `backend/db.py` — the SQL warehouse connection helper + shared
   `escape_sql_literal()`.
 - `backend/boq_classification.py` — the BOQ-category cache + thresholds,
@@ -48,13 +61,15 @@ comparison a project opens into isn't started yet.
   /api/users/identify`) against `bid_analyzer_users`.
 - `backend/api/projects.py` — the Projects registry (`GET`/`POST
   /api/projects`, `GET /api/projects/{id}`) against `bid_analyzer_projects`.
+- `backend/api/comparison.py` — `GET /api/rfqs/{rfqnum}/comparison`, the
+  BOQ line-item comparison + commercial flags.
 - `databricks/schema/` — this app's own (not Maximo-ingested) table DDL;
   see its `README.md` for the convention.
 - `frontend/` — Next.js + Tailwind v4 + shadcn/base-ui (ported from
   `full-feature-buildout` for visual consistency — none of that branch's
   comparison *logic* is reusable against real data, only its UI shell).
   Routes: `/` (Projects), `/rfqs` (RFQ Browse/Search), `/projects/[id]`
-  (project detail stub).
+  (project detail + BOQ comparison).
 - `start.sh` / `app.yaml` — Databricks Apps deployment plumbing, confirmed
   working against a real deployment.
 

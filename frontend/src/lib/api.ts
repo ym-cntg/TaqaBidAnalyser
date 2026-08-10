@@ -120,3 +120,48 @@ export async function createProject(params: CreateProjectParams): Promise<Projec
   });
   return handleJson<ProjectSummary>(res);
 }
+
+export interface ComparisonLinePrice {
+  unit_cost: number | null;
+  line_cost: number | null;
+  unquoted: boolean;
+  is_lowest: boolean;
+  arithmetic_error: boolean;
+  outlier: boolean;
+}
+
+export interface ComparisonLine {
+  rfqlinenum: number;
+  description: string | null;
+  qty: number | null;
+  unit: string | null;
+  prices: Record<string, ComparisonLinePrice>;
+}
+
+export interface ComparisonVendor {
+  vendor: string;
+  name: string | null;
+  contract_total: number;
+  unquoted_count: number;
+  arithmetic_error_count: number;
+  outlier_count: number;
+}
+
+export interface NotSubmittedVendor {
+  vendor: string;
+  name: string | null;
+}
+
+export interface ComparisonResponse {
+  rfqnum: string;
+  total_line_count: number;
+  truncated: boolean;
+  vendors: ComparisonVendor[];
+  not_submitted: NotSubmittedVendor[];
+  lines: ComparisonLine[];
+}
+
+export async function getComparison(rfqnum: string): Promise<ComparisonResponse> {
+  const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqnum)}/comparison`);
+  return handleJson<ComparisonResponse>(res);
+}

@@ -128,6 +128,11 @@ export interface ComparisonLinePrice {
   is_lowest: boolean;
   arithmetic_error: boolean;
   outlier: boolean;
+  zero_price: boolean;
+  corrected: boolean;
+  corrected_by_label: string | null;
+  corrected_note: string | null;
+  corrected_at: string | null;
 }
 
 export interface ComparisonLine {
@@ -145,6 +150,7 @@ export interface ComparisonVendor {
   unquoted_count: number;
   arithmetic_error_count: number;
   outlier_count: number;
+  zero_price_count: number;
 }
 
 export interface NotSubmittedVendor {
@@ -164,4 +170,38 @@ export interface ComparisonResponse {
 export async function getComparison(rfqnum: string): Promise<ComparisonResponse> {
   const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqnum)}/comparison`);
   return handleJson<ComparisonResponse>(res);
+}
+
+export interface CreateCorrectionParams {
+  rfqnum: string;
+  rfqlinenum: number;
+  vendor: string;
+  unitCost: number;
+  userId: string;
+  note?: string;
+}
+
+export interface CorrectionSummary {
+  rfqlinenum: number;
+  vendor: string;
+  unit_cost: number;
+  line_cost: number | null;
+  note: string | null;
+  corrected_by_label: string | null;
+  corrected_at: string;
+}
+
+export async function createCorrection(params: CreateCorrectionParams): Promise<CorrectionSummary> {
+  const res = await fetch(`/api/rfqs/${encodeURIComponent(params.rfqnum)}/corrections`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      rfqlinenum: params.rfqlinenum,
+      vendor: params.vendor,
+      unit_cost: params.unitCost,
+      user_id: params.userId,
+      note: params.note ?? null,
+    }),
+  });
+  return handleJson<CorrectionSummary>(res);
 }

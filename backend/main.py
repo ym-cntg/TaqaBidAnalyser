@@ -8,6 +8,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.comparison import router as comparison_router
+from backend.api.corrections import router as corrections_router
 from backend.api.projects import router as projects_router
 from backend.api.rfqs import router as rfqs_router
 from backend.api.users import router as users_router
@@ -31,6 +32,7 @@ app.include_router(rfqs_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 app.include_router(projects_router, prefix="/api")
 app.include_router(comparison_router, prefix="/api")
+app.include_router(corrections_router, prefix="/api")
 
 
 @app.get("/health")

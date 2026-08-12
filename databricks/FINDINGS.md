@@ -800,6 +800,51 @@ real but too thin to read as a substantial procurement in a demo — they
 just barely clear the `MIN_BOQ_LINE_ITEMS` threshold. `N-19281` sits in
 the useful middle ground between those two extremes.
 
+Note: the first fill-rate query used to find these candidates only
+checked whether a `quotationline` row *existed* for a `(RFQLINENUM,
+VENDOR)` pair, not whether `UNITCOST` was actually populated on it — so
+it overstated fill rate wherever a row exists with a null price. Fixed by
+also requiring `UNITCOST IS NOT NULL` before counting a line as quoted,
+matching `comparison.py`'s real `unquoted` definition exactly.
+
+### AED 0 is not "no data" — the zero-price flag
+
+A `quotationline` row can have a non-null `UNITCOST`/`LINECOST` of
+exactly `0`. For a real BOQ line this is almost always a data-entry
+problem, not a legitimate free item — but it used to be treated as a
+completely normal quote, meaning it could win `is_lowest` (a bad zero
+beating a real bid) and skew the outlier median.
+
+`backend/api/comparison.py` now flags this separately (`zero_price`,
+distinct from `unquoted` — it has a value, just a bad one) and excludes
+zero-priced cells from both the `is_lowest` candidate pool and the
+outlier median's input list. A `zero_price_count` is tracked per vendor
+alongside the existing three flag counts.
+
+### Price corrections — `backend/api/corrections.py`, `bid_analyzer_price_corrections`
+
+The app's first user-facing *editing* feature: any price cell in the
+comparison (quoted, zero-priced, or unquoted) can be manually corrected
+or filled in from the UI. Corrections are **never** written back into
+`quotationline` — that table is Maximo-ingested, not ours to mutate.
+Instead they're stored in a new app-owned overlay table
+(`databricks/schema/bid_analyzer_price_corrections.sql`, same pattern as
+`bid_analyzer_projects`/`bid_analyzer_users`) and applied at display time
+by `comparison.py`. Append-only — correcting again just adds a new row;
+the latest per `(rfqnum, rfqlinenum, vendor)` wins.
+
+A corrected cell is trusted: `arithmetic_error`/`outlier`/`zero_price`
+are all suppressed for it (a human already reviewed it), but it still
+fully participates in `is_lowest` and `contract_total` — that's the
+point of correcting bad data, not just annotating it.
+
+Needs the same `CREATE TABLE`/`INSERT` grant as the Projects tables. The
+comparison endpoint's corrections lookup is deliberately fail-open: if
+the corrections table doesn't exist yet (nobody has corrected anything,
+or the grant isn't applied), the read-only comparison view still returns
+normally with zero corrections applied, rather than breaking a working
+feature because of an unrelated write-path gap.
+
 ### Browse-list scope: only RFQs with a real BOQ (`MIN_BOQ_LINE_ITEMS = 10`)
 
 Product decision: the RFQ Browse page only ever loads RFQs with

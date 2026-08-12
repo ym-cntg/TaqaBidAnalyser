@@ -50,9 +50,20 @@ read, so it works independent of the Projects write-grant status. See
 `databricks/FINDINGS.md`'s "App implementation" section for flag
 thresholds and the known-value spot check.
 
+**Price corrections built**: any cell in the comparison table (quoted,
+zero-priced, or unquoted) can be manually corrected or filled in inline.
+A `0` price is now flagged distinctly from `unquoted` (`zero_price`) and
+excluded from the lowest-price/outlier logic — a real BOQ line's genuine
+`AED 0` bid is almost always a data problem, not a legitimate free item.
+Corrections are stored as an append-only overlay
+(`bid_analyzer_price_corrections`) and applied at display time — **never**
+written back into the Maximo-ingested `quotationline` table. A corrected
+cell is trusted (its own flags are suppressed) but still fully
+participates in `is_lowest`/`contract_total`. See `databricks/FINDINGS.md`.
+
 - `backend/main.py` — app factory, mounts `rfqs`/`users`/`projects`/
-  `comparison` routers; keeps `/api/rfq-count` as a lightweight
-  connectivity smoke test.
+  `comparison`/`corrections` routers; keeps `/api/rfq-count` as a
+  lightweight connectivity smoke test.
 - `backend/db.py` — the SQL warehouse connection helper + shared
   `escape_sql_literal()`.
 - `backend/boq_classification.py` — the BOQ-category cache + thresholds,
@@ -62,7 +73,9 @@ thresholds and the known-value spot check.
 - `backend/api/projects.py` — the Projects registry (`GET`/`POST
   /api/projects`, `GET /api/projects/{id}`) against `bid_analyzer_projects`.
 - `backend/api/comparison.py` — `GET /api/rfqs/{rfqnum}/comparison`, the
-  BOQ line-item comparison + commercial flags.
+  BOQ line-item comparison + commercial flags + corrections overlay.
+- `backend/api/corrections.py` — `POST /api/rfqs/{rfqnum}/corrections`
+  against `bid_analyzer_price_corrections`.
 - `databricks/schema/` — this app's own (not Maximo-ingested) table DDL;
   see its `README.md` for the convention.
 - `frontend/` — Next.js + Tailwind v4 + shadcn/base-ui (ported from

@@ -41,14 +41,26 @@ side bidder pricing per BOQ line (lowest price per line highlighted),
 plus automated commercial flags (unquoted items, arithmetic errors, price
 outliers, bidders who didn't submit at all). Deliberately **round-1
 scope only** — uses `quotationline`'s original quote
-(`UNITCOST`/`LINECOST`), since the real data has no queryable round-by-
-round history, and **no lot rollup** — just contract totals — since lots
-aren't modeled anywhere in the real schema. Vendor names are now
-resolvable via a `companies` table (`companies.company = rfqvendor.VENDOR`)
-— unverified fully-qualified location, first real use of this table. Pure
-read, so it works independent of the Projects write-grant status. See
-`databricks/FINDINGS.md`'s "App implementation" section for flag
-thresholds and the known-value spot check.
+(`UNITCOST`/`LINECOST`) — and **no lot rollup** — just contract totals —
+since lots aren't modeled anywhere in the real schema. Vendor names are
+now resolvable via a `companies` table (`companies.company =
+rfqvendor.VENDOR`) — unverified fully-qualified location, first real use
+of this table. Pure read, so it works independent of the Projects
+write-grant status. See `databricks/FINDINGS.md`'s "App implementation"
+section for flag thresholds and the known-value spot check.
+
+**Round-over-round tracking built**, a second tab on the project detail
+page: a line chart + totals table of each vendor's contract total across
+negotiation revisions, plus anomaly flags (a price that rises between
+rounds; a discount far steeper than peers gave on the same line). Real
+round history turned out to exist after all — `DISCOUNTHISTORY`/
+`DISCOUNTHISTORYLINE`, never queried before this — layered over
+`quotationline`'s original quote via a forward-fill reconstruction that's
+correct whether Maximo stores each revision as a full snapshot or a
+delta (unverified which; see `databricks/FINDINGS.md`). Chart palette is
+the dataviz skill's validated reference categorical set, adopted as this
+app's `--chart-1..5` tokens (the previously-ported ones were never
+actually validated — this is the first real chart in the app).
 
 **Price corrections built**: any cell in the comparison table (quoted,
 zero-priced, or unquoted) can be manually corrected or filled in inline.
@@ -76,13 +88,15 @@ participates in `is_lowest`/`contract_total`. See `databricks/FINDINGS.md`.
   BOQ line-item comparison + commercial flags + corrections overlay.
 - `backend/api/corrections.py` — `POST /api/rfqs/{rfqnum}/corrections`
   against `bid_analyzer_price_corrections`.
+- `backend/api/rounds.py` — `GET /api/rfqs/{rfqnum}/rounds`, the
+  round-over-round trend + movement flags.
 - `databricks/schema/` — this app's own (not Maximo-ingested) table DDL;
   see its `README.md` for the convention.
 - `frontend/` — Next.js + Tailwind v4 + shadcn/base-ui (ported from
   `full-feature-buildout` for visual consistency — none of that branch's
   comparison *logic* is reusable against real data, only its UI shell).
   Routes: `/` (Projects), `/rfqs` (RFQ Browse/Search), `/projects/[id]`
-  (project detail + BOQ comparison).
+  (project detail: BOQ comparison + round tracking tabs).
 - `start.sh` / `app.yaml` — Databricks Apps deployment plumbing, confirmed
   working against a real deployment.
 

@@ -8,11 +8,13 @@ import { ApiError, getProject, type ProjectSummary } from "@/lib/api";
 import { BOQ_CATEGORY_BADGE_VARIANT, BOQ_CATEGORY_LABELS } from "@/lib/boq-category";
 import { formatDate } from "@/lib/format";
 import { RfqComparison } from "./rfq-comparison";
+import { RoundTracking } from "./round-tracking";
 
 export function ProjectDetailClient({ projectId }: { projectId: string }) {
   const [project, setProject] = useState<ProjectSummary | null>(null);
   const [status, setStatus] = useState<"loading" | "ok" | "error" | "not-found">("loading");
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"comparison" | "rounds">("comparison");
 
   useEffect(() => {
     getProject(projectId)
@@ -75,7 +77,34 @@ export function ProjectDetailClient({ projectId }: { projectId: string }) {
               </div>
             </div>
 
-            <RfqComparison rfqnum={project.rfqnum} />
+            <div className="inline-flex gap-1 rounded-lg bg-muted p-1">
+              <button
+                onClick={() => setActiveTab("comparison")}
+                className={`rounded-md px-4 py-1.5 text-sm font-medium transition-all ${
+                  activeTab === "comparison"
+                    ? "bg-card text-primary shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                BOQ Comparison
+              </button>
+              <button
+                onClick={() => setActiveTab("rounds")}
+                className={`rounded-md px-4 py-1.5 text-sm font-medium transition-all ${
+                  activeTab === "rounds"
+                    ? "bg-card text-primary shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Round Tracking
+              </button>
+            </div>
+
+            {activeTab === "comparison" ? (
+              <RfqComparison rfqnum={project.rfqnum} />
+            ) : (
+              <RoundTracking rfqnum={project.rfqnum} />
+            )}
           </>
         )}
       </div>

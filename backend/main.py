@@ -11,6 +11,7 @@ from backend.api.comparison import router as comparison_router
 from backend.api.corrections import router as corrections_router
 from backend.api.projects import router as projects_router
 from backend.api.rfqs import router as rfqs_router
+from backend.api.rounds import router as rounds_router
 from backend.api.users import router as users_router
 from backend.db import CATALOG, SCHEMA, get_connection
 
@@ -33,6 +34,7 @@ app.include_router(users_router, prefix="/api")
 app.include_router(projects_router, prefix="/api")
 app.include_router(comparison_router, prefix="/api")
 app.include_router(corrections_router, prefix="/api")
+app.include_router(rounds_router, prefix="/api")
 
 
 @app.get("/health")

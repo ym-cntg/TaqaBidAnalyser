@@ -170,6 +170,19 @@ overwritten, not preserved. The header-level `DISCOUNT_REVISION` counter
 `DISCOUNT_UNITCOST` was 100% null in this sample — appears unused, at least
 here. `QUOTESTARTDATE`/`QUOTEENDDATE` were also 100% null.
 
+**Correction (2026-08-14): the round-by-round history above DOES exist —
+just not in `quotationline`.** The user identified two tables never
+queried in this codebase: `DISCOUNTHISTORY` and `DISCOUNTHISTORYLINE`.
+`DISCOUNTHISTORYLINE` has `RFQNUM`/`VENDOR`/`REVISION`/`RFQLINENUM`/
+`LINECOSTWDIS` — a per-line price snapshot at each negotiation revision,
+joinable back to `quotationline` via the already-confirmed `RFQLINENUM`
+cross-vendor key. `DISCOUNTHISTORY` (header/event level) adds `STAGE`,
+`ENTERDATE`, `DISCOUNT_SUBMISSION_DATE`, `DISCOUNT_APPLY_DATE` per
+`(RFQNUM, VENDOR, REVISION)`. See the "App implementation: round-over-round
+tracking" section near the end of this file for the query design and what
+remains unverified (this codebase's first use of both tables — no live
+data seen yet).
+
 **Lots have no structural home anywhere — confirmed, not just assumed.**
 - No column named anything like `LOT` in any of the 4 line-item/header
   schemas (checked directly across all `DESCRIBE` output pulled so far).
@@ -577,13 +590,17 @@ clear next step once notebook 05 unblocks or in parallel with it.
   tender. Remaining question for TAQA: is this true generally, or does some
   other tender actually split lots as separate RFQNUMs (worth one more
   spot-check on a known multi-lot tender before generalizing)?
-- **New**: `quotationline` shows real per-line discount data
-  (`LINECOST`/`LINECOSTWDIS`/`DISCOUNT_PERCENT`) but no round-number or
-  change-timestamp column — only original-vs-final state is visible, no
-  round-by-round history. Confirm with TAQA whether that intermediate
-  history exists anywhere in Maximo (even if not in these 7
-  tables/views) — it matters for whether a rebuilt comparison tool can ever
-  show true round-over-round movement per line, or only net effect.
+- ~~`quotationline` shows real per-line discount data but no round-number
+  or change-timestamp column — confirm whether intermediate round history
+  exists anywhere in Maximo~~ **Answered**: `DISCOUNTHISTORY`/
+  `DISCOUNTHISTORYLINE` hold exactly this (see the "round-by-round
+  history" correction above and the "App implementation: round-over-round
+  tracking" section below). Remaining question for TAQA: whether each
+  `REVISION`'s `DISCOUNTHISTORYLINE` rows are a full snapshot of every
+  line the vendor has priced, or only the lines that changed at that
+  revision — the app's reconstruction is written to produce correct
+  totals either way (forward-fill), but confirming the real shape would
+  remove the need for that hedge.
 - Reconcile the two round mechanisms: `DISCOUNT_REVISION`/
   `POSTBID_DISCOUNT_COUNTER` (common, ~12% of vendor rows, lockstep-paired)
   vs. the `-R1`/`-R2` `RFQNUM` suffix (rare, ~0.12% of rows) — are these
@@ -861,3 +878,53 @@ expected, not a bug. The floor is slightly stricter than the `detailed_boq`
 category boundary (`> 10` vs. `> 9`), so the in-scope count should be a bit
 below the 3,289 `detailed_boq` figure above — exact number not yet
 confirmed against the live warehouse.
+
+### App implementation: round-over-round tracking (`backend/api/rounds.py`)
+
+**New tables from the user, resolving the "no round-by-round history"
+gap documented above**: `DISCOUNTHISTORY` and `DISCOUNTHISTORYLINE` —
+first use of either in this codebase, fully-qualified location assumed
+to match the rest of the schema (`ingestion_framework_test.bid_data_exploration`),
+**UNVERIFIED**. Given schema:
+
+- `DISCOUNTHISTORYLINE`: `RFQNUM`, `VENDOR`, `REVISION` (decimal — the
+  round number), `RFQLINENUM`, `LINECOSTWDIS` (decimal — the discounted
+  line cost at that revision), `DISCOUNT_PERCENT`, `RECORDTYPE`,
+  `DESCRIPTION`, `ORGID`/`SITEID`, `ROWSTAMP`.
+- `DISCOUNTHISTORY`: `RFQNUM`, `VENDOR`, `REVISION`, `STAGE`,
+  `ENTERDATE`, `DISCOUNT_SUBMISSION_DATE`, `DISCOUNT_APPLY_DATE`,
+  `DESCRIPTION`, `ORGID`/`SITEID`, `ROWSTAMP` — header/event level, one
+  row per `(RFQNUM, VENDOR, REVISION)`.
+
+**The one real design risk, handled by construction rather than
+assumption**: whether each `REVISION`'s `DISCOUNTHISTORYLINE` rows are a
+full snapshot of every line the vendor has ever priced, or only the lines
+that changed at that revision, is unknown (no live data seen). The
+backend forward-fills: seed a running per-vendor per-line map from
+`quotationline.LINECOST` (the `"original"` round), then overlay each
+increasing `REVISION`'s rows onto it and snapshot the *full* resulting
+map at that revision. This produces correct per-round contract totals
+whether revisions are deltas or full snapshots — verified in the
+scratchpad test suite with both fixture shapes producing identical
+totals. `RECORDTYPE`/`STAGE` aren't used yet — meaning unclear, not
+investigated.
+
+**Flags** ported from `full-feature-buildout`'s `backend/analysis/rounds.py`
+(the "local version" round-tracking dashboard this was modeled on),
+adapted from hierarchical `item_no`/lot to `RFQLINENUM` (no lots, per
+above): a **critical** flag for any round-over-round price *increase*
+per line (negotiation rounds should never raise a price), and a
+**warning** flag for a discount far steeper than the peer-median ratio
+other vendors showed on the same line between the same two rounds
+(`PEER_DEVIATION_THRESHOLD = 4.0`, needs ≥3 peer vendors to judge) —
+same threshold values as the original build, carried over as a
+first-pass baseline pending real data, same spirit as the comparison
+feature's arithmetic/outlier thresholds.
+
+**Known-value spot check** once deployed: `GET /api/rfqs/N-19535/rounds`
+should return `rounds_present` starting with `"original"` followed by
+whatever real `REVISION` values exist for this RFQ in
+`DISCOUNTHISTORYLINE` (none confirmed yet — first thing to check), and
+each vendor's `"original"` point should match their `contract_total` in
+`GET /api/rfqs/N-19535/comparison` exactly (both derive from the same
+`quotationline.LINECOST` sum).

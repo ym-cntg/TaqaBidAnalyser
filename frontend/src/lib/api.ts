@@ -205,3 +205,35 @@ export async function createCorrection(params: CreateCorrectionParams): Promise<
   });
   return handleJson<CorrectionSummary>(res);
 }
+
+export interface RoundPoint {
+  round: string;
+  contract_total: number | null;
+  date: string | null;
+}
+
+export interface VendorRoundTrend {
+  vendor: string;
+  name: string | null;
+  points: RoundPoint[];
+}
+
+export interface RoundFlag {
+  severity: "critical" | "warning";
+  vendor: string;
+  rfqlinenum: number;
+  description: string | null;
+  detail: string;
+}
+
+export interface RoundTrendResponse {
+  rfqnum: string;
+  rounds_present: string[];
+  vendors: VendorRoundTrend[];
+  flags: RoundFlag[];
+}
+
+export async function getRoundTrend(rfqnum: string): Promise<RoundTrendResponse> {
+  const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqnum)}/rounds`);
+  return handleJson<RoundTrendResponse>(res);
+}

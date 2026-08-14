@@ -913,6 +913,7 @@ dependencies = [
     { name = "databricks-sdk" },
     { name = "databricks-sql-connector" },
     { name = "fastapi" },
+    { name = "openpyxl" },
     { name = "python-dotenv" },
     { name = "uvicorn" },
 ]
@@ -922,6 +923,7 @@ requires-dist = [
     { name = "databricks-sdk", specifier = ">=0.30.0" },
     { name = "databricks-sql-connector", specifier = ">=3.0.0" },
     { name = "fastapi", specifier = ">=0.138.0" },
+    { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "uvicorn", specifier = ">=0.49.0" },
 ]

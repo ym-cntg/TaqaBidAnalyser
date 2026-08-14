@@ -144,8 +144,10 @@ def _fetch_discount_history_dates(rfqnum: str) -> dict[tuple[str, float], str | 
     return out
 
 
-@router.get("/rfqs/{rfqnum}/rounds")
-async def get_round_trend(rfqnum: str):
+def build_round_trend(rfqnum: str) -> dict:
+    """The round-trend payload as a plain callable, so other modules
+    (e.g. negotiation_report.py) can reuse it via an in-process call
+    rather than an HTTP round trip to our own API."""
     vendor_names = _fetch_vendor_roster(rfqnum)
     original_lines = _fetch_original_lines(rfqnum)
     history_rows = _fetch_discount_history_lines(rfqnum)
@@ -277,3 +279,8 @@ async def get_round_trend(rfqnum: str):
         "vendors": [asdict(v) for v in vendor_trends],
         "flags": [asdict(f) for f in flags],
     }
+
+
+@router.get("/rfqs/{rfqnum}/rounds")
+async def get_round_trend(rfqnum: str):
+    return build_round_trend(rfqnum)

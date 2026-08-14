@@ -928,3 +928,46 @@ whatever real `REVISION` values exist for this RFQ in
 each vendor's `"original"` point should match their `contract_total` in
 `GET /api/rfqs/N-19535/comparison` exactly (both derive from the same
 `quotationline.LINECOST` sum).
+
+### App implementation: negotiation-prep export (`backend/api/negotiation_report.py`)
+
+Closes CLAUDE.md's manual-process step 6 ("prepare negotiation notes per
+bidder") by consolidating the comparison and round-tracking flags already
+computed elsewhere — no new analysis, no new tables, no new queries of
+its own. Calls `build_comparison()`/`build_round_trend()` directly
+in-process (both `comparison.py` and `rounds.py` were refactored to
+expose their logic as plain callables, not just route handlers, for
+exactly this reuse).
+
+**Deliberately not LLM-generated** — `full-feature-buildout`'s equivalent
+(`backend/reporting/llm_report.py`) used Azure OpenAI for an executive
+summary, an award recommendation, and prose negotiation points. This
+version presents ranked facts only (contract total ascending, % above
+lowest, flag counts, a capped/deduped top-issues list per vendor,
+mirroring that build's `digest.py` pattern minus the LLM call) — no
+"primary award", no generated reasoning. A deliberate, discussed scope
+cut, not a placeholder for "add the LLM later without telling anyone" —
+if a narrative layer gets built, it should be visibly additive to this,
+not a silent replacement.
+
+**Known limitation, inherited, not new**: `_collect_boq_issues` scans
+`comparison["lines"]`, which is itself capped at `comparison.py`'s
+`LINES_CAP = 500` — on a BOQ larger than that, issues on lines past the
+cap won't appear in anyone's `top_issues` (though the flag *counts* are
+unaffected, those come from `comparison.py`'s vendor summary which is
+always computed over the full line set).
+
+**Export**: an `.xlsx` via `openpyxl` (already used elsewhere in this
+project per `CLAUDE.md`'s tooling notes, but was only present in
+`uv.lock` as a stale transitive entry, not actually declared in
+`pyproject.toml`, until this feature — now a real, intentional
+dependency). Two sheets: `Summary` (one row per vendor, ranked) and
+`Issues` (every vendor's top issues, flattened) — no per-lot sheets like
+the original build's export, since lots don't exist in real data.
+
+**Known-value spot check** once deployed: `GET
+/api/rfqs/N-19535/negotiation-report` should rank the same vendors
+`GET /api/rfqs/N-19535/comparison` returns, by the same `contract_total`
+values, and `has_round_data` should match whether `GET
+/api/rfqs/N-19535/rounds` actually returns more than one `rounds_present`
+entry.

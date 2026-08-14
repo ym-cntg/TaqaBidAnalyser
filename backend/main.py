@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.comparison import router as comparison_router
 from backend.api.corrections import router as corrections_router
+from backend.api.negotiation_report import router as negotiation_report_router
 from backend.api.projects import router as projects_router
 from backend.api.rfqs import router as rfqs_router
 from backend.api.rounds import router as rounds_router
@@ -35,6 +36,7 @@ app.include_router(projects_router, prefix="/api")
 app.include_router(comparison_router, prefix="/api")
 app.include_router(corrections_router, prefix="/api")
 app.include_router(rounds_router, prefix="/api")
+app.include_router(negotiation_report_router, prefix="/api")
 
 
 @app.get("/health")

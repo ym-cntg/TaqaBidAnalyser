@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { ApiError, getProject, type ProjectSummary } from "@/lib/api";
 import { BOQ_CATEGORY_BADGE_VARIANT, BOQ_CATEGORY_LABELS } from "@/lib/boq-category";
 import { formatDate } from "@/lib/format";
+import { NegotiationReport } from "./negotiation-report";
 import { RfqComparison } from "./rfq-comparison";
 import { RoundTracking } from "./round-tracking";
 
@@ -14,7 +15,7 @@ export function ProjectDetailClient({ projectId }: { projectId: string }) {
   const [project, setProject] = useState<ProjectSummary | null>(null);
   const [status, setStatus] = useState<"loading" | "ok" | "error" | "not-found">("loading");
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"comparison" | "rounds">("comparison");
+  const [activeTab, setActiveTab] = useState<"comparison" | "rounds" | "report">("comparison");
 
   useEffect(() => {
     getProject(projectId)
@@ -98,13 +99,21 @@ export function ProjectDetailClient({ projectId }: { projectId: string }) {
               >
                 Round Tracking
               </button>
+              <button
+                onClick={() => setActiveTab("report")}
+                className={`rounded-md px-4 py-1.5 text-sm font-medium transition-all ${
+                  activeTab === "report"
+                    ? "bg-card text-primary shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                Negotiation Report
+              </button>
             </div>
 
-            {activeTab === "comparison" ? (
-              <RfqComparison rfqnum={project.rfqnum} />
-            ) : (
-              <RoundTracking rfqnum={project.rfqnum} />
-            )}
+            {activeTab === "comparison" && <RfqComparison rfqnum={project.rfqnum} />}
+            {activeTab === "rounds" && <RoundTracking rfqnum={project.rfqnum} />}
+            {activeTab === "report" && <NegotiationReport rfqnum={project.rfqnum} />}
           </>
         )}
       </div>

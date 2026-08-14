@@ -174,8 +174,10 @@ def _fetch_user_names(user_ids: set[str]) -> dict[str, str]:
         return {}
 
 
-@router.get("/rfqs/{rfqnum}/comparison")
-async def get_comparison(rfqnum: str):
+def build_comparison(rfqnum: str) -> dict:
+    """The comparison payload as a plain callable, so other modules (e.g.
+    negotiation_report.py) can reuse it via an in-process call rather than
+    an HTTP round trip to our own API."""
     vendor_names = _fetch_vendor_roster(rfqnum)
     rows = _fetch_quotationlines(rfqnum)
 
@@ -344,3 +346,8 @@ async def get_comparison(rfqnum: str):
         "not_submitted": [asdict(v) for v in not_submitted],
         "lines": [asdict(l) for l in returned_lines],
     }
+
+
+@router.get("/rfqs/{rfqnum}/comparison")
+async def get_comparison(rfqnum: str):
+    return build_comparison(rfqnum)

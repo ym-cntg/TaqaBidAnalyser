@@ -237,3 +237,43 @@ export async function getRoundTrend(rfqnum: string): Promise<RoundTrendResponse>
   const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqnum)}/rounds`);
   return handleJson<RoundTrendResponse>(res);
 }
+
+export interface TopIssue {
+  source: "boq" | "round";
+  severity: "critical" | "warning";
+  rfqlinenum: number;
+  description: string | null;
+  detail: string;
+}
+
+export interface NegotiationVendorSummary {
+  vendor: string;
+  name: string | null;
+  rank: number;
+  contract_total: number;
+  pct_above_lowest: number;
+  unquoted_count: number;
+  arithmetic_error_count: number;
+  outlier_count: number;
+  zero_price_count: number;
+  round_critical_count: number;
+  round_warning_count: number;
+  top_issues: TopIssue[];
+}
+
+export interface NegotiationReportResponse {
+  rfqnum: string;
+  generated_at: string;
+  has_round_data: boolean;
+  vendors: NegotiationVendorSummary[];
+  not_submitted: NotSubmittedVendor[];
+}
+
+export async function getNegotiationReport(rfqnum: string): Promise<NegotiationReportResponse> {
+  const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqnum)}/negotiation-report`);
+  return handleJson<NegotiationReportResponse>(res);
+}
+
+export function negotiationReportExportUrl(rfqnum: string): string {
+  return `/api/rfqs/${encodeURIComponent(rfqnum)}/negotiation-report.xlsx`;
+}

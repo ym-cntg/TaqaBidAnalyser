@@ -73,9 +73,22 @@ written back into the Maximo-ingested `quotationline` table. A corrected
 cell is trusted (its own flags are suppressed) but still fully
 participates in `is_lowest`/`contract_total`. See `databricks/FINDINGS.md`.
 
+**Negotiation-prep export built**, a third tab: closes CLAUDE.md's manual-
+process step 6 ("prepare negotiation notes per bidder") by consolidating
+the BOQ comparison and round-movement flags into one ranked, exportable
+view — vendors sorted by contract total, % above lowest, flag-count
+badges, and a capped/deduped top-issues list per vendor, plus an Excel
+download. Deliberately **not LLM-generated** (a discussed, deliberate
+scope cut — `full-feature-buildout`'s equivalent used Azure OpenAI for a
+narrative recommendation; this version presents ranked facts only, no
+"primary award," so the analyst draws their own conclusions). See
+`databricks/FINDINGS.md`'s "App implementation" section for the digest
+design and the one inherited limitation (top-issues detection is capped
+the same way the comparison view already is, on very large BOQs).
+
 - `backend/main.py` — app factory, mounts `rfqs`/`users`/`projects`/
-  `comparison`/`corrections` routers; keeps `/api/rfq-count` as a
-  lightweight connectivity smoke test.
+  `comparison`/`corrections`/`rounds`/`negotiation_report` routers; keeps
+  `/api/rfq-count` as a lightweight connectivity smoke test.
 - `backend/db.py` — the SQL warehouse connection helper + shared
   `escape_sql_literal()`.
 - `backend/boq_classification.py` — the BOQ-category cache + thresholds,
@@ -90,13 +103,17 @@ participates in `is_lowest`/`contract_total`. See `databricks/FINDINGS.md`.
   against `bid_analyzer_price_corrections`.
 - `backend/api/rounds.py` — `GET /api/rfqs/{rfqnum}/rounds`, the
   round-over-round trend + movement flags.
+- `backend/api/negotiation_report.py` — `GET
+  /api/rfqs/{rfqnum}/negotiation-report` (+ `.xlsx`), the ranked
+  per-vendor digest combining comparison + round flags.
 - `databricks/schema/` — this app's own (not Maximo-ingested) table DDL;
   see its `README.md` for the convention.
 - `frontend/` — Next.js + Tailwind v4 + shadcn/base-ui (ported from
   `full-feature-buildout` for visual consistency — none of that branch's
   comparison *logic* is reusable against real data, only its UI shell).
   Routes: `/` (Projects), `/rfqs` (RFQ Browse/Search), `/projects/[id]`
-  (project detail: BOQ comparison + round tracking tabs).
+  (project detail: BOQ comparison + round tracking + negotiation report
+  tabs).
 - `start.sh` / `app.yaml` — Databricks Apps deployment plumbing, confirmed
   working against a real deployment.
 

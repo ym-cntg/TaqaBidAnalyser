@@ -8,3 +8,11 @@ command: ["bash", "start.sh"]
 env:
   - name: DATABRICKS_HTTP_PATH
     value: "/sql/1.0/warehouses/894ac035bea82a7f"  # test_sql_dbr
+  # DATABRICKS_LLM_ENDPOINT: confirmed working via a direct notebook test
+  # against this workspace (adb-3103344838598474.14.azuredatabricks.net)
+  # using the OpenAI-compatible client -- a Databricks-hosted pay-per-token
+  # foundation model endpoint, not a custom-deployed one, so no separate
+  # serving capacity to manage. Alternative on the same workspace if a
+  # larger open-weights model is ever preferred: "databricks-gpt-oss-120b".
+  - name: DATABRICKS_LLM_ENDPOINT
+    value: "databricks-claude-haiku-4-5"

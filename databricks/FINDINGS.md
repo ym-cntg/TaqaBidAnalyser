@@ -1002,14 +1002,36 @@ WorkspaceClient().serving_endpoints.query(
 plumbing.
 
 **Config**: a new `DATABRICKS_LLM_ENDPOINT` env var (mirrors how `db.py`
-reads `DATABRICKS_HTTP_PATH`) — the Model Serving endpoint name from the
-workspace's Serving UI. **Unverified**: whether a usable endpoint exists
-in TAQA's workspace, its real name, and whether the app's service
-principal has "Can Query" permission on it — same shape of open question
-as every other Databricks Apps permission gap in this file (SQL warehouse
-HTTP path, `CREATE TABLE`/`INSERT` grant for the Projects/corrections
-tables above). Needs a real deploy + likely another admin grant request
-to confirm.
+reads `DATABRICKS_HTTP_PATH`), set in `app.yaml` alongside
+`DATABRICKS_HTTP_PATH` for the deployed app.
+
+**Endpoint confirmed real and working (2026-08-20)** — the user ran a
+direct notebook test against this workspace
+(`adb-3103344838598474.14.azuredatabricks.net`) using the OpenAI-compatible
+client (`OpenAI(api_key=<notebook token>,
+base_url=f"{host}/serving-endpoints")`, `model="databricks-claude-haiku-4-5"`)
+and got a real completion back. `app.yaml` now sets
+`DATABRICKS_LLM_ENDPOINT=databricks-claude-haiku-4-5` — a Databricks-hosted
+pay-per-token foundation model endpoint (Claude Haiku 4.5 served through
+Databricks' own governed proxy, not a customer-deployed model), so there's
+no separate serving capacity to provision or manage. An alternative
+endpoint on the same workspace is available if a larger open-weights
+model is ever preferred: `databricks-gpt-oss-120b`
+(`https://adb-3103344838598474.14.azuredatabricks.net/serving-endpoints/databricks-gpt-oss-120b/invocations`).
+
+This closes the "does a usable endpoint exist" half of the original open
+question. **Still unconfirmed**: whether the *app's own service
+principal* (not the notebook's interactive user identity used in the
+test above) has "Can Query" permission on this endpoint — foundation
+model endpoints are workspace-shared, but per-principal query grants are
+typically still enforced the same as for a custom-deployed endpoint. The
+notebook test used the calling *user's* auto-injected token
+(`dbutils...apiToken()`), which is a different identity than whatever the
+deployed app authenticates as (`WorkspaceClient()`'s auto-detected
+Databricks Apps credentials, per `backend/db.py`'s existing pattern) — so
+this still needs a real deploy to confirm the service principal itself
+isn't blocked. If it 502s with `api_error` after deploy, this grant is
+the first thing to check.
 
 **Guardrails actually implemented** (mapping directly to the AIA
 governance conversation that prompted this feature):

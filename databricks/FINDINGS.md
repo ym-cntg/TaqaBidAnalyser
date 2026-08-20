@@ -971,3 +971,123 @@ the original build's export, since lots don't exist in real data.
 values, and `has_round_data` should match whether `GET
 /api/rfqs/N-19535/rounds` actually returns more than one `rounds_present`
 entry.
+
+### App implementation: AI negotiation narrative (`backend/api/negotiation_narrative.py`)
+
+The LLM layer the previous section explicitly deferred ("if a narrative
+layer gets built, it should be visibly additive to this, not a silent
+replacement") — built after the user closed out an AI Impact Assessment
+for this project and **explicitly chose Databricks Model Serving / AI
+Gateway** over a direct external LLM API call, so vendor pricing data
+never leaves TAQA's governed Databricks workspace. `POST
+/api/rfqs/{rfqnum}/negotiation-report/narrative` layers an AI-written
+executive summary + per-vendor observations on top of the deterministic
+report above — additive, not a replacement: the ranked-facts view stays
+primary, this is an optional, user-triggered extra (no auto-generation on
+page load, no caching).
+
+**SDK call shape — verified by introspecting the installed
+`databricks-sdk` directly (`inspect.signature()`), not assumed from
+documentation**:
+```python
+WorkspaceClient().serving_endpoints.query(
+    name: str, *, messages: list[ChatMessage] = None,
+    max_tokens: int = None, temperature: float = None,
+) -> QueryEndpointResponse
+# ChatMessage(content: str, role: ChatMessageRole.SYSTEM/USER/ASSISTANT)
+# response.choices[0].message.content  -- the model's text
+```
+`WorkspaceClient()` takes no args — same auto-detected auth `db.py`'s
+`Config()`-based connection already relies on, no new credential
+plumbing.
+
+**Config**: a new `DATABRICKS_LLM_ENDPOINT` env var (mirrors how `db.py`
+reads `DATABRICKS_HTTP_PATH`) — the Model Serving endpoint name from the
+workspace's Serving UI. **Unverified**: whether a usable endpoint exists
+in TAQA's workspace, its real name, and whether the app's service
+principal has "Can Query" permission on it — same shape of open question
+as every other Databricks Apps permission gap in this file (SQL warehouse
+HTTP path, `CREATE TABLE`/`INSERT` grant for the Projects/corrections
+tables above). Needs a real deploy + likely another admin grant request
+to confirm.
+
+**Guardrails actually implemented** (mapping directly to the AIA
+governance conversation that prompted this feature):
+- **Structured-JSON-only output**, never free text rendered directly —
+  the system prompt requires exactly `{executive_summary, observations:
+  [{vendor, note, talking_points}], caveats}`. A response that doesn't
+  parse to this shape is a hard `parse_error` (502), never best-effort
+  rendered.
+- **No `primary_award`/recommendation field** — deliberately absent
+  (unlike `full-feature-buildout`'s equivalent, which had one). Advisory
+  observations only; the model never produces an award decision, and the
+  UI's "ok" state carries a persistent "AI-generated — advisory only, not
+  a decision" banner.
+- **Deterministic safety net, applied after the model responds**
+  (`_apply_safety_net`, mirrors `full-feature-buildout`'s
+  `_enforce_data_gap_safety_net` pattern) — code the model's output can
+  never override, not an instruction it might not follow. Strips any
+  `observations` entry referencing a vendor that isn't actually one of
+  this RFQ's real submitting vendors, and logs the correction as a
+  `caveats` entry rather than silently dropping it. Verified with a
+  scratchpad test injecting a hallucinated vendor code into a canned
+  model response — confirmed stripped, confirmed logged.
+- **Prompt-injection guardrail**: only system-computed data enters the
+  prompt (vendor codes/resolved names, computed totals/ranks/flag
+  counts, the digest's own synthesized issue strings). The one free-text
+  user input anywhere in this app — the price-correction `note` field
+  (`backend/api/corrections.py`) — is deliberately never included in any
+  prompt.
+- **No autonomous actions** — this endpoint only ever returns a report
+  for a human to read; it never triggers a write, email, or decision on
+  its own.
+- **No caching, always a fresh call** — a deliberate "single high-value,
+  user-triggered action," not an auto-refreshing or auto-loaded feature.
+- **Rate-limiting/content-safety filtering is explicitly out of scope for
+  application code** — that belongs at the Databricks AI Gateway
+  admin-config level on whichever endpoint gets chosen, worth raising
+  with whoever manages the workspace once `DATABRICKS_LLM_ENDPOINT` is
+  set for real.
+
+**Error taxonomy**, discriminated by HTTP status code alone (never by
+string-matching the message — the exact bug class the misleading-503
+fix earlier in this project's history was about avoiding a repeat of):
+`not_configured` (missing env var) → 503; `api_error` (the Model Serving
+call itself failed, most likely a missing "Can Query" grant) and
+`parse_error` (response didn't match the expected JSON shape) → both 502.
+The frontend only needs to tell "not configured" apart from "something
+went wrong when it tried" — it doesn't need to visually distinguish
+`api_error` from `parse_error` from each other.
+
+**Verified in the scratchpad** (`TestClient` + a fake `WorkspaceClient`,
+same pattern as every other backend feature in this project — no live
+Databricks connection): missing `DATABRICKS_LLM_ENDPOINT` → clean 503
+`not_configured`; well-formed response including a hallucinated vendor →
+200 with that observation stripped and a caveat added; non-JSON model
+content → 502 `parse_error`; the SDK `query()` call raising (simulating a
+permissions error) → 502 `api_error` surfacing the real underlying
+exception text, not a generic message. Frontend build/typecheck passed
+clean; a mock-backend Playwright walkthrough confirmed both the idle
+"Generate AI summary" state and the loaded state (executive summary,
+per-vendor observation cards, caveats list, advisory banner) render
+correctly.
+
+**Known-value spot check** once deployed: `POST
+/api/rfqs/N-19535/negotiation-report/narrative` should reference only
+vendors that also appear in `GET /api/rfqs/N-19535/negotiation-report`'s
+`vendors` list — if the response ever includes a `caveats` entry about a
+stripped vendor, that's the safety net catching a real hallucination, not
+a bug.
+
+**Dev-environment note, unrelated to this feature but worth recording**:
+while visually verifying this card, `next dev` (Turbopack) served pages
+but never actually hydrated React when the app was accessed via
+`http://127.0.0.1:3000` — the browser's WebSocket to `/_next/webpack-hmr`
+was rejected by Next's `allowedDevOrigins` check (which allows
+`localhost` but not the `127.0.0.1` literal by default), and something
+about that failure silently prevented client-side hydration from
+completing at all (no console error, no page error — just an inert page
+stuck on every component's initial "Loading…" state). Using
+`http://localhost:3000` instead of `127.0.0.1` fixed it immediately. Not
+an app bug — just a trap worth avoiding in any future local verification
+session against `next dev`.

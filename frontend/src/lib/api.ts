@@ -277,3 +277,43 @@ export async function getNegotiationReport(rfqnum: string): Promise<NegotiationR
 export function negotiationReportExportUrl(rfqnum: string): string {
   return `/api/rfqs/${encodeURIComponent(rfqnum)}/negotiation-report.xlsx`;
 }
+
+export interface NarrativeObservation {
+  vendor: string;
+  note: string;
+  talking_points: string[];
+}
+
+export interface NarrativeReport {
+  rfqnum: string;
+  generated_at: string;
+  executive_summary: string;
+  observations: NarrativeObservation[];
+  caveats: string[];
+}
+
+// Distinguishes "the feature isn't set up" (503) from everything else
+// (502 -- the model call failed, or came back in an unusable shape) so
+// the UI can show setup instructions instead of a raw error only in the
+// one case that's actually about configuration, not a real failure.
+export class NarrativeUnavailableError extends Error {
+  status: number;
+  notConfigured: boolean;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+    this.notConfigured = status === 503;
+  }
+}
+
+export async function generateNegotiationNarrative(rfqnum: string): Promise<NarrativeReport> {
+  const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqnum)}/negotiation-report/narrative`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new NarrativeUnavailableError(res.status, body?.detail ?? `Request failed with status ${res.status}`);
+  }
+  return res.json();
+}

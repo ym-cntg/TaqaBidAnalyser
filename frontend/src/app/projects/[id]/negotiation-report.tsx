@@ -1,13 +1,16 @@
 "use client";
 
-import { Download } from "lucide-react";
+import { Download, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  generateNegotiationNarrative,
   getNegotiationReport,
   negotiationReportExportUrl,
+  NarrativeUnavailableError,
+  type NarrativeReport,
   type NegotiationReportResponse,
   type TopIssue,
 } from "@/lib/api";
@@ -20,6 +23,122 @@ function vendorLabel(vendor: string, name: string | null): string {
 function issueLabel(issue: TopIssue): string {
   const source = issue.source === "round" ? "Round" : "BOQ";
   return `${source} · ${issue.severity}`;
+}
+
+type NarrativeState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ok"; report: NarrativeReport }
+  | { status: "not-configured"; message: string }
+  | { status: "error"; message: string };
+
+function vendorLabelFrom(data: NegotiationReportResponse, vendor: string): string {
+  return data.vendors.find((v) => v.vendor === vendor)?.name ?? vendor;
+}
+
+function AiSummaryCard({ rfqnum, data }: { rfqnum: string; data: NegotiationReportResponse }) {
+  const [state, setState] = useState<NarrativeState>({ status: "idle" });
+
+  function generate() {
+    setState({ status: "loading" });
+    generateNegotiationNarrative(rfqnum)
+      .then((report) => setState({ status: "ok", report }))
+      .catch((err) => {
+        if (err instanceof NarrativeUnavailableError && err.notConfigured) {
+          setState({ status: "not-configured", message: err.message });
+        } else {
+          setState({ status: "error", message: err instanceof Error ? err.message : String(err) });
+        }
+      });
+  }
+
+  return (
+    <div className="rounded-xl border border-border/60 shadow-sm p-4 space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <Sparkles className="h-4 w-4 text-primary" />
+          <span className="font-semibold text-sm">AI summary</span>
+        </div>
+        {state.status === "ok" && (
+          <Button variant="outline" size="sm" onClick={generate}>
+            Regenerate
+          </Button>
+        )}
+      </div>
+
+      {state.status === "idle" && (
+        <div className="flex flex-col items-start gap-3">
+          <p className="text-sm text-muted-foreground">
+            Generate an AI-written overview and per-vendor notes from the ranked data above.
+            Advisory only — it never makes an award decision, and can only reference vendors and
+            numbers already in this report.
+          </p>
+          <Button size="sm" onClick={generate}>
+            <Sparkles className="h-4 w-4" /> Generate AI summary
+          </Button>
+        </div>
+      )}
+
+      {state.status === "loading" && (
+        <p className="text-sm text-muted-foreground animate-pulse py-4">Generating…</p>
+      )}
+
+      {state.status === "not-configured" && (
+        <div className="rounded-lg border border-amber-400/40 bg-amber-500/5 p-3 text-sm">
+          <p className="font-medium">AI summary isn&apos;t set up yet</p>
+          <p className="text-muted-foreground mt-1 text-xs">{state.message}</p>
+        </div>
+      )}
+
+      {state.status === "error" && (
+        <div className="space-y-2">
+          <div className="rounded-lg border border-red-400/40 bg-red-500/5 p-3 text-sm text-red-600">
+            {state.message}
+          </div>
+          <Button variant="outline" size="sm" onClick={generate}>
+            Try again
+          </Button>
+        </div>
+      )}
+
+      {state.status === "ok" && (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-primary/20 bg-primary/[0.04] px-3 py-2 text-xs text-muted-foreground">
+            AI-generated — advisory only, not a decision. Every vendor/number below comes from the
+            ranked data above; anything it couldn&apos;t verify was removed automatically.
+          </div>
+          <p className="text-sm leading-relaxed">{state.report.executive_summary}</p>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            {state.report.observations.map((obs) => (
+              <div key={obs.vendor} className="rounded-lg border border-border/60 p-3 space-y-1.5">
+                <div className="font-medium text-sm">{vendorLabelFrom(data, obs.vendor)}</div>
+                <p className="text-sm text-muted-foreground">{obs.note}</p>
+                {obs.talking_points.length > 0 && (
+                  <ul className="list-disc list-inside text-xs text-muted-foreground space-y-0.5">
+                    {obs.talking_points.map((p, i) => (
+                      <li key={i}>{p}</li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </div>
+
+          {state.report.caveats.length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-muted-foreground mb-1">Caveats</p>
+              <ul className="list-disc list-inside text-xs text-muted-foreground space-y-0.5">
+                {state.report.caveats.map((c, i) => (
+                  <li key={i}>{c}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function NegotiationReport({ rfqnum }: { rfqnum: string }) {
@@ -55,6 +174,8 @@ export function NegotiationReport({ rfqnum }: { rfqnum: string }) {
 
   return (
     <div className="space-y-6">
+      <AiSummaryCard rfqnum={rfqnum} data={data} />
+
       <div className="flex flex-wrap items-center justify-between gap-4">
         <p className="text-sm text-muted-foreground">
           Ranked by contract total, lowest first. Not a recommendation — the numbers and flags

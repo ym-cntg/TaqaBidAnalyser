@@ -86,9 +86,27 @@ narrative recommendation; this version presents ranked facts only, no
 design and the one inherited limitation (top-issues detection is capped
 the same way the comparison view already is, on very large BOQs).
 
+**AI negotiation narrative built**, an "AI summary" card on the
+negotiation-report tab: an on-demand, LLM-generated executive summary +
+per-vendor observations layered on top of the deterministic report above
+— additive, not a replacement, and never auto-generated (a user has to
+click "Generate AI summary"). Built after the user closed out an AI
+Impact Assessment for this project and **explicitly chose Databricks
+Model Serving / AI Gateway** over a direct external API call, so vendor
+pricing data never leaves TAQA's governed workspace. No award
+recommendation field — advisory observations only, always under a
+persistent "AI-generated — advisory only, not a decision" banner — and a
+deterministic safety net strips (and logs as a caveat) any observation
+referencing a vendor that isn't actually in this RFQ's real data, so a
+hallucination can't slip through silently. See `databricks/FINDINGS.md`'s
+"App implementation" section for the verified SDK call shape, the
+`DATABRICKS_LLM_ENDPOINT` config (**unverified against a real
+endpoint/permission grant**), and the full guardrails list.
+
 - `backend/main.py` — app factory, mounts `rfqs`/`users`/`projects`/
-  `comparison`/`corrections`/`rounds`/`negotiation_report` routers; keeps
-  `/api/rfq-count` as a lightweight connectivity smoke test.
+  `comparison`/`corrections`/`rounds`/`negotiation_report`/
+  `negotiation_narrative` routers; keeps `/api/rfq-count` as a
+  lightweight connectivity smoke test.
 - `backend/db.py` — the SQL warehouse connection helper + shared
   `escape_sql_literal()`.
 - `backend/boq_classification.py` — the BOQ-category cache + thresholds,
@@ -106,6 +124,9 @@ the same way the comparison view already is, on very large BOQs).
 - `backend/api/negotiation_report.py` — `GET
   /api/rfqs/{rfqnum}/negotiation-report` (+ `.xlsx`), the ranked
   per-vendor digest combining comparison + round flags.
+- `backend/api/negotiation_narrative.py` — `POST
+  /api/rfqs/{rfqnum}/negotiation-report/narrative`, the AI-generated
+  summary layer (Databricks Model Serving) on top of the digest above.
 - `databricks/schema/` — this app's own (not Maximo-ingested) table DDL;
   see its `README.md` for the convention.
 - `frontend/` — Next.js + Tailwind v4 + shadcn/base-ui (ported from

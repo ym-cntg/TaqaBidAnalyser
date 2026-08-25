@@ -39,15 +39,26 @@ the "App implementation" section of `databricks/FINDINGS.md` for details.
 **BOQ line-item comparison built**, on the project detail page: side-by-
 side bidder pricing per BOQ line (lowest price per line highlighted),
 plus automated commercial flags (unquoted items, arithmetic errors, price
-outliers, bidders who didn't submit at all). Deliberately **round-1
-scope only** — uses `quotationline`'s original quote
-(`UNITCOST`/`LINECOST`) — and **no lot rollup** — just contract totals —
-since lots aren't modeled anywhere in the real schema. Vendor names are
-now resolvable via a `companies` table (`companies.company =
-rfqvendor.VENDOR`) — unverified fully-qualified location, first real use
-of this table. Pure read, so it works independent of the Projects
-write-grant status. See `databricks/FINDINGS.md`'s "App implementation"
-section for flag thresholds and the known-value spot check.
+outliers, bidders who didn't submit at all). A **round selector** at the
+top lets the analyst view the same grid at any later negotiation
+revision, not just the original quote — a line not yet revised at a
+given round carries forward its last known value (the same forward-fill
+reconstruction the round-tracking dashboard uses, factored out into
+`backend/api/round_snapshots.py` so both features share one
+implementation). Arithmetic-error checks and manual price corrections
+stay original-round only, since `DISCOUNTHISTORYLINE` only carries a
+post-discount line total, not an independently-reported unit rate. **No
+lot rollup** — just contract totals — since lots aren't modeled anywhere
+in the real schema. Vendor names are resolvable via a `companies` table
+(`companies.company = rfqvendor.VENDOR`) — unverified fully-qualified
+location, first real use of this table. Pure read, so it works
+independent of the Projects write-grant status. The outlier check was
+redesigned to compare each line against a vendor's *own* typical
+pricing pattern rather than the raw peer median — the old version
+flagged a consistently pricier or cheaper vendor on nearly every line,
+which was just their overall price level, not a real anomaly. See
+`databricks/FINDINGS.md`'s "App implementation" section for flag
+thresholds and the known-value spot check.
 
 **Round-over-round tracking built**, a second tab on the project detail
 page: a line chart + totals table of each vendor's contract total across
@@ -119,8 +130,12 @@ guardrails list.
   /api/users/identify`) against `bid_analyzer_users`.
 - `backend/api/projects.py` — the Projects registry (`GET`/`POST
   /api/projects`, `GET /api/projects/{id}`) against `bid_analyzer_projects`.
-- `backend/api/comparison.py` — `GET /api/rfqs/{rfqnum}/comparison`, the
-  BOQ line-item comparison + commercial flags + corrections overlay.
+- `backend/api/comparison.py` — `GET /api/rfqs/{rfqnum}/comparison`
+  (+ `?round=`), the BOQ line-item comparison + commercial flags +
+  corrections overlay.
+- `backend/api/round_snapshots.py` — the shared forward-fill
+  reconstruction (`build_round_snapshots()`) both `comparison.py`'s round
+  selector and `rounds.py`'s trend chart are built on.
 - `backend/api/corrections.py` — `POST /api/rfqs/{rfqnum}/corrections`
   against `bid_analyzer_price_corrections`.
 - `backend/api/rounds.py` — `GET /api/rfqs/{rfqnum}/rounds`, the

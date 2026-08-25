@@ -734,12 +734,35 @@ everything else) — **UNVERIFIED**, first real use of this table in this
 codebase. If `GET /api/rfqs/{rfqnum}/comparison` 503s with something
 `TABLE_OR_VIEW_NOT_FOUND`-shaped, check this table's real location first.
 
-**"Round 1" scope, deliberately minimal**: this comparison uses
-`quotationline.UNITCOST`/`LINECOST` only — the original quote. As already
-documented above, `quotationline` has no round-number or change-timestamp
-column, only an original-vs-final snapshot (`LINECOST` vs
-`LINECOSTWDIS`), so there is no queryable per-round history to compare
-against. This is a deliberate, data-driven scope cut, not a placeholder.
+**Originally "Round 1" scope only — since extended to a round selector**
+(2026-08-25). This comparison originally used `quotationline.UNITCOST`/
+`LINECOST` only (the original quote), because `quotationline` itself has
+no round-number or change-timestamp column. Once `DISCOUNTHISTORY`/
+`DISCOUNTHISTORYLINE` were found (see the "round-by-round history"
+correction earlier in this file), `GET /api/rfqs/{rfqnum}/comparison`
+gained an optional `?round=` query param reusing the same forward-fill
+reconstruction the round-tracking dashboard already relies on — now
+factored out into its own shared module, `backend/api/round_snapshots.py`
+(`build_round_snapshots()`), imported by both `comparison.py` and
+`rounds.py` so the logic isn't duplicated. `round=` (or omitted) defaults
+to `"original"`; any other value must be one of the RFQ's real
+`rounds_present` labels or the endpoint 400s cleanly.
+
+The response now always includes `round` (the resolved round actually
+returned) and `rounds_present` (every valid round label for this RFQ),
+so the frontend can render a dropdown from one call without a second
+round-trend request just to populate it.
+
+Because `DISCOUNTHISTORYLINE` only carries a post-discount `LINECOSTWDIS`
+— no per-round unit rate — a non-original round derives `unit_cost =
+line_cost / qty` (qty doesn't change across a price renegotiation). Since
+that unit_cost is derived rather than independently reported, the
+arithmetic-error check is only meaningful for the original round and is
+hardcoded `False` for every other round. Manual price corrections
+(`bid_analyzer_price_corrections`) are similarly **original-round only**
+— a correction fixes one specific bad entry and doesn't carry a round of
+its own, so reapplying the same absolute price at a later round would
+misrepresent whatever real discount happened since.
 
 **No lot rollup**: confirmed above that no lot column/structure exists
 anywhere in the real schema, so this feature computes **contract totals
@@ -763,8 +786,34 @@ this is the most likely thing to need iteration):
 - **Unquoted**: a vendor has no `quotationline` row for a given
   `RFQLINENUM`, or has one with a null `UNITCOST`.
 - **Arithmetic error**: `abs(LINECOST - ORDERQTY * UNITCOST) > 0.01`.
-- **Outlier**: only computed when ≥3 vendors quoted a line (fewer isn't a
-  meaningful sample) — `abs(UNITCOST - median_of_quotes) / median > 0.5`.
+- **Outlier — redesigned 2026-08-25, see below**: the original version
+  flagged any line where `abs(UNITCOST - peer_median) / peer_median >
+  0.5`. That flat check turned out to be badly noisy on real bidder
+  behavior: a vendor who's simply priced consistently higher or lower
+  than the group across the *whole* BOQ (real construction bidders often
+  differ 2-3x overall) got "outlier" on nearly every single line — that's
+  just their overall price level, not a per-line anomaly, and it flooded
+  the UI with flags. Replaced with a two-pass, vendor-relative check:
+  for every line with ≥3 real quotes, compute `ratio = unit_cost /
+  peer_median`; for every vendor, compute their own `baseline_ratio =
+  median(ratio across every peer-comparable line they quoted)`, but only
+  if they have ≥`MIN_LINES_FOR_VENDOR_BASELINE` (5) such lines — too few
+  and they get no outlier flags at all, since there's no reliable
+  baseline to compare against. A line is only flagged if `abs(ratio -
+  baseline_ratio) / baseline_ratio > 0.5` — i.e. unusual **for that
+  vendor specifically**, not just "different from the group." This
+  directly targets CLAUDE.md's "unbalanced bidding" concept (a vendor
+  pricing one line very differently from their own normal pattern) while
+  no longer punishing a vendor for simply being a globally different
+  price level. Verified in the scratchpad with a fixture where one
+  vendor is consistently ~3x pricier and another ~0.7x cheaper across 8
+  lines, plus one vendor with a genuine one-line 10x spike: the redesign
+  gives the two consistently-priced vendors zero outlier flags and
+  correctly isolates the one real spike, whereas the old formula would
+  have flagged the consistently-pricier vendor on nearly every line. All
+  thresholds (`OUTLIER_DEVIATION = 0.5`, `OUTLIER_MIN_QUOTES = 3`,
+  `MIN_LINES_FOR_VENDOR_BASELINE = 5`) are still first-pass values, to be
+  tuned once this runs against real bidder data.
 - **Did not submit** (distinct from "unquoted"): an invited vendor
   (present in `rfqvendor`) with zero `quotationline` rows for the whole
   RFQ at all — listed separately from the comparison table's vendor

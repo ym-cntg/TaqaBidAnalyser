@@ -15,6 +15,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { getRoundTrend, type RoundTrendResponse } from "@/lib/api";
 import { formatAED, formatDate, formatNumber } from "@/lib/format";
+import { formatRoundLabel } from "@/lib/rounds";
 
 // dataviz skill's validated reference categorical palette, adopted as
 // this app's --chart-1..5 tokens (see globals.css) -- fixed order, never
@@ -25,12 +26,6 @@ const MAX_CHART_LINES = 5;
 
 function vendorLabel(vendor: string, name: string | null): string {
   return name ?? vendor;
-}
-
-function formatRoundLabel(round: string): string {
-  if (round === "original") return "Original";
-  const n = parseFloat(round);
-  return `Revision ${Number.isFinite(n) ? n : round}`;
 }
 
 export function RoundTracking({ rfqnum }: { rfqnum: string }) {

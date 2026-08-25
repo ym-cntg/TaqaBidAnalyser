@@ -24,11 +24,11 @@ from dataclasses import asdict, dataclass
 from fastapi import APIRouter, HTTPException
 
 from backend.api.comparison import _fetch_vendor_roster
+from backend.api.round_snapshots import ORIGINAL, build_round_snapshots
 from backend.db import CATALOG, SCHEMA, escape_sql_literal, get_connection
 
 router = APIRouter()
 
-ORIGINAL = "original"
 INCREASE_TOLERANCE = 1.0  # AED -- ignore float/rounding noise below this
 PEER_DEVIATION_THRESHOLD = 4.0
 PEER_MIN_SAMPLE = 3
@@ -63,25 +63,6 @@ def _iso(dt) -> str | None:
     return dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
 
 
-def _fetch_original_lines(rfqnum: str) -> dict[tuple[str, float], float]:
-    """(vendor, rfqlinenum) -> original LINECOST, excluding HEADER rows."""
-    try:
-        with get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    f"""
-                    SELECT VENDOR, RFQLINENUM, LINECOST
-                    FROM {CATALOG}.{SCHEMA}.quotationline
-                    WHERE RFQNUM = '{escape_sql_literal(rfqnum)}'
-                      AND (ORDERUNIT IS NULL OR ORDERUNIT <> 'HEADER')
-                      AND LINECOST IS NOT NULL
-                    """
-                )
-                return {(row.VENDOR, float(row.RFQLINENUM)): float(row.LINECOST) for row in cursor.fetchall()}
-    except Exception as exc:
-        raise HTTPException(status_code=503, detail=f"Query against quotationline failed: {exc}") from exc
-
-
 def _fetch_line_descriptions(rfqnum: str) -> dict[float, str]:
     """Best-effort, for flag readability only -- fail-open."""
     try:
@@ -99,25 +80,6 @@ def _fetch_line_descriptions(rfqnum: str) -> dict[float, str]:
                 return {float(row.RFQLINENUM): row.DESCRIPTION for row in cursor.fetchall()}
     except Exception:
         return {}
-
-
-def _fetch_discount_history_lines(rfqnum: str) -> list:
-    try:
-        with get_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute(
-                    f"""
-                    SELECT VENDOR, REVISION, RFQLINENUM, LINECOSTWDIS
-                    FROM {CATALOG}.{SCHEMA}.DISCOUNTHISTORYLINE
-                    WHERE RFQNUM = '{escape_sql_literal(rfqnum)}'
-                    ORDER BY REVISION ASC
-                    """
-                )
-                return cursor.fetchall()
-    except Exception as exc:
-        raise HTTPException(
-            status_code=503, detail=f"Query against DISCOUNTHISTORYLINE failed: {exc}"
-        ) from exc
 
 
 def _fetch_discount_history_dates(rfqnum: str) -> dict[tuple[str, float], str | None]:
@@ -149,46 +111,17 @@ def build_round_trend(rfqnum: str) -> dict:
     (e.g. negotiation_report.py) can reuse it via an in-process call
     rather than an HTTP round trip to our own API."""
     vendor_names = _fetch_vendor_roster(rfqnum)
-    original_lines = _fetch_original_lines(rfqnum)
-    history_rows = _fetch_discount_history_lines(rfqnum)
+    round_data = build_round_snapshots(rfqnum)
+    rounds_present = round_data["rounds_present"]
+    snapshots = round_data["snapshots"]
+    vendors = round_data["vendors"]
+    revisions = round_data["revisions"]
     history_dates = _fetch_discount_history_dates(rfqnum)
 
-    if not original_lines and not history_rows and not vendor_names:
+    if not vendors and not vendor_names:
         raise HTTPException(status_code=404, detail=f"Unknown RFQNUM {rfqnum!r}")
 
     line_descriptions = _fetch_line_descriptions(rfqnum)
-
-    revisions = sorted({float(row.REVISION) for row in history_rows})
-    rounds_present = [ORIGINAL] + [str(r) for r in revisions]
-
-    by_revision: dict[float, list] = {}
-    for row in history_rows:
-        by_revision.setdefault(float(row.REVISION), []).append(row)
-
-    vendors = sorted({v for v, _ in original_lines} | {row.VENDOR for row in history_rows})
-
-    # Forward-fill: running per-vendor per-line map, seeded from the
-    # original quote, then overlaid revision by revision.
-    running: dict[str, dict[float, float]] = {}
-    for (v, linenum), cost in original_lines.items():
-        running.setdefault(v, {})[linenum] = cost
-
-    # snapshots[vendor][round_label] -> full per-line map as of that round
-    # (absent entirely for a vendor with no data yet at that round).
-    snapshots: dict[str, dict[str, dict[float, float]]] = {v: {} for v in vendors}
-    for v in vendors:
-        if v in running:
-            snapshots[v][ORIGINAL] = dict(running[v])
-
-    for revision in revisions:
-        label = str(revision)
-        for row in by_revision[revision]:
-            if row.LINECOSTWDIS is None:
-                continue
-            running.setdefault(row.VENDOR, {})[float(row.RFQLINENUM)] = float(row.LINECOSTWDIS)
-        for v in vendors:
-            if v in running:
-                snapshots[v][label] = dict(running[v])
 
     # Flags: compare consecutive present rounds, per vendor, per line.
     flags: list[RoundFlag] = []

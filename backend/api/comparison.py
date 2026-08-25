@@ -1,11 +1,7 @@
 """GET /api/rfqs/{rfqnum}/comparison -- side-by-side bidder pricing per
-BOQ line, plus automated commercial flags.
-
-Round-1 scope only: uses quotationline.LINECOST/UNITCOST (the original
-quote). There's no queryable round-by-round history in this data (no
-round-number or change-timestamp column -- see databricks/FINDINGS.md),
-only an original-vs-final snapshot (LINECOST vs LINECOSTWDIS), so this is
-the only round comparison the real data actually supports right now.
+BOQ line, plus automated commercial flags. Supports an optional ?round=
+query param (see backend/api/round_snapshots.py) to view the same grid at
+any later negotiation revision, not just the original quote.
 
 Vendor names resolved via `companies` (companies.company =
 rfqvendor.VENDOR) -- first use of this table in this codebase; its
@@ -18,12 +14,26 @@ quotationline data here at display time -- never written back into
 quotationline itself. Corrections are trusted: a corrected cell is
 excluded from arithmetic_error/outlier/zero_price flagging (it's already
 been reviewed by a person) but still fully participates in is_lowest and
-contract_total, since that's the point of correcting it.
+contract_total, since that's the point of correcting it. A correction
+fixes a specific bad ORIGINAL-round entry and doesn't carry a round of
+its own, so it's only applied when viewing the original round -- reusing
+the same absolute price at every later round would misrepresent whatever
+negotiated discount happened after the correction was made.
 
-Pure read of quotationline/rfqvendor/companies -- no Unity Catalog write
-grant needed for the comparison itself, independent of the Projects
-feature's write-blocked status. The corrections *overlay* fetch is a
-read too; only backend/api/corrections.py writes.
+Round-scoped view: DISCOUNTHISTORYLINE only carries a post-discount
+LINECOST (LINECOSTWDIS), no per-round unit rate, so a round other than
+"original" derives unit_cost = line_cost / qty (qty doesn't change
+across rounds -- these are price renegotiations, not scope changes).
+Because that unit_cost is derived, not independently reported, the
+arithmetic_error check (which exists to catch a vendor's own qty x rate
+math not matching what they typed) is only meaningful for the original
+round and is always False for any other round.
+
+Pure read of quotationline/DISCOUNTHISTORY(LINE)/rfqvendor/companies --
+no Unity Catalog write grant needed for the comparison itself,
+independent of the Projects feature's write-blocked status. The
+corrections *overlay* fetch is a read too; only backend/api/corrections.py
+writes.
 """
 
 import statistics
@@ -31,6 +41,7 @@ from dataclasses import asdict, dataclass
 
 from fastapi import APIRouter, HTTPException
 
+from backend.api.round_snapshots import ORIGINAL, build_round_snapshots
 from backend.db import CATALOG, SCHEMA, escape_sql_literal, get_connection
 
 router = APIRouter()
@@ -39,6 +50,11 @@ LINES_CAP = 500
 ARITHMETIC_TOLERANCE = 0.01
 OUTLIER_DEVIATION = 0.5
 OUTLIER_MIN_QUOTES = 3
+# A vendor needs at least this many peer-comparable lines before we trust
+# a "typical ratio to the peer group" for them -- see the outlier note in
+# build_comparison() below for why this replaced a flat peer-deviation
+# check. First-pass value, tune later against real data.
+MIN_LINES_FOR_VENDOR_BASELINE = 5
 
 
 @dataclass
@@ -174,17 +190,35 @@ def _fetch_user_names(user_ids: set[str]) -> dict[str, str]:
         return {}
 
 
-def build_comparison(rfqnum: str) -> dict:
+def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
     """The comparison payload as a plain callable, so other modules (e.g.
     negotiation_report.py) can reuse it via an in-process call rather than
-    an HTTP round trip to our own API."""
+    an HTTP round trip to our own API.
+
+    round_label picks which negotiation round to view: None/"original"
+    (the default) uses quotationline's own UNITCOST/LINECOST directly.
+    Any other value must be one of build_round_snapshots()'s
+    rounds_present labels -- see the module docstring above for how a
+    later round's prices are derived.
+    """
     vendor_names = _fetch_vendor_roster(rfqnum)
     rows = _fetch_quotationlines(rfqnum)
 
     if not rows and not vendor_names:
         raise HTTPException(status_code=404, detail=f"Unknown RFQNUM {rfqnum!r}")
 
-    corrections = _fetch_corrections(rfqnum)
+    round_data = build_round_snapshots(rfqnum)
+    rounds_present = round_data["rounds_present"]
+    selected_round = round_label or ORIGINAL
+    if selected_round not in rounds_present:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown round {selected_round!r} for {rfqnum}. Valid rounds: {rounds_present}",
+        )
+    is_original = selected_round == ORIGINAL
+    snapshots = round_data["snapshots"]
+
+    corrections = _fetch_corrections(rfqnum) if is_original else {}
     corrector_names = _fetch_user_names({c.corrected_by for c in corrections.values()})
 
     lines_by_num: dict[float, list] = {}
@@ -192,27 +226,38 @@ def build_comparison(rfqnum: str) -> dict:
         lines_by_num.setdefault(row.RFQLINENUM, []).append(row)
 
     submitting_vendors = {row.VENDOR for row in rows}
-    vendor_totals = {v: 0.0 for v in submitting_vendors}
-    vendor_unquoted = {v: 0 for v in submitting_vendors}
-    vendor_errors = {v: 0 for v in submitting_vendors}
-    vendor_outliers = {v: 0 for v in submitting_vendors}
-    vendor_zero_price = {v: 0 for v in submitting_vendors}
+    if not is_original:
+        # Only vendors who actually have a forward-filled price by this
+        # round -- almost always identical to the original round's set,
+        # except a vendor who genuinely never submitted anything at all.
+        submitting_vendors = {
+            v for v in submitting_vendors if snapshots.get(v, {}).get(selected_round) is not None
+        }
 
-    all_lines: list[ComparisonLine] = []
-    for linenum in sorted(lines_by_num.keys()):
-        line_rows = lines_by_num[linenum]
+    # Pass 1: resolve (unit_cost, line_cost, qty, corrected) for every
+    # (line, vendor) up front. Needed before any flagging, because outlier
+    # detection (pass 2 below) has to see every vendor's full price
+    # history across the whole BOQ before it can tell "unusual for this
+    # vendor" apart from "this vendor is just generally pricier/cheaper".
+    canonical_by_line: dict[float, object] = {}
+    resolved_by_line: dict[float, dict[str, dict]] = {}
+    for linenum, line_rows in lines_by_num.items():
         canonical = line_rows[0]
+        canonical_by_line[linenum] = canonical
         by_vendor = {r.VENDOR: r for r in line_rows}
         canonical_qty = float(canonical.ORDERQTY) if canonical.ORDERQTY is not None else None
 
-        # Pass 1: resolve each vendor's (unit_cost, line_cost), applying a
-        # correction override if one exists for this (line, vendor).
         resolved: dict[str, dict] = {}
         for vendor in submitting_vendors:
-            r = by_vendor.get(vendor)
-            unit_cost = float(r.UNITCOST) if r is not None and r.UNITCOST is not None else None
-            line_cost = float(r.LINECOST) if r is not None and r.LINECOST is not None else None
-            qty = float(r.ORDERQTY) if r is not None and r.ORDERQTY is not None else None
+            if is_original:
+                r = by_vendor.get(vendor)
+                unit_cost = float(r.UNITCOST) if r is not None and r.UNITCOST is not None else None
+                line_cost = float(r.LINECOST) if r is not None and r.LINECOST is not None else None
+                qty = float(r.ORDERQTY) if r is not None and r.ORDERQTY is not None else None
+            else:
+                line_cost = snapshots.get(vendor, {}).get(selected_round, {}).get(linenum)
+                qty = canonical_qty
+                unit_cost = (line_cost / qty) if (line_cost is not None and qty) else None
 
             correction = corrections.get((linenum, vendor))
             corrected = correction is not None
@@ -235,19 +280,63 @@ def build_comparison(rfqnum: str) -> dict:
                 corrected_note=corrected_note,
                 corrected_at=corrected_at,
             )
+        resolved_by_line[linenum] = resolved
 
-        # Pass 2: aggregates over resolved values, excluding zero-priced
-        # and unquoted cells -- neither is a real basis for "lowest" or
-        # a meaningful outlier median.
-        real_unit_costs = [
-            v["unit_cost"] for v in resolved.values() if v["unit_cost"] is not None and v["unit_cost"] != 0
-        ]
-        median_unit_cost = (
-            statistics.median(real_unit_costs) if len(real_unit_costs) >= OUTLIER_MIN_QUOTES else None
+    # Pass 2: each vendor's own typical unit-cost-to-peer-median ratio.
+    #
+    # The old check flagged a line whenever a vendor's unit cost was >50%
+    # away from that line's peer median -- but a vendor who's simply
+    # priced consistently higher (or lower) than the group across the
+    # *whole* BOQ then gets "outlier" on nearly every single line, which
+    # is just their overall price level, not a per-line anomaly. Real
+    # construction bidders often do differ by 2-3x overall.
+    #
+    # Comparing each line's ratio-to-peer-median against that *same
+    # vendor's own* typical ratio instead only flags a line that's
+    # unusual **for them specifically** -- e.g. a vendor who's normally
+    # right around the peer median but priced way off on one particular
+    # line (a data-entry mistake, or the unbalanced/front-loaded pricing
+    # CLAUDE.md's manual process specifically calls out). A vendor with
+    # too few peer-comparable lines to establish a reliable baseline
+    # (MIN_LINES_FOR_VENDOR_BASELINE) gets no outlier flags at all rather
+    # than falling back to the old, noisier check.
+    peer_median_by_line: dict[float, float | None] = {}
+    for linenum, resolved in resolved_by_line.items():
+        real_costs = [v["unit_cost"] for v in resolved.values() if v["unit_cost"] not in (None, 0)]
+        peer_median_by_line[linenum] = (
+            statistics.median(real_costs) if len(real_costs) >= OUTLIER_MIN_QUOTES else None
         )
-        real_line_costs = [
-            v["line_cost"] for v in resolved.values() if v["line_cost"] is not None and v["line_cost"] != 0
-        ]
+
+    vendor_ratios: dict[str, list[float]] = {v: [] for v in submitting_vendors}
+    for linenum, resolved in resolved_by_line.items():
+        peer_median = peer_median_by_line[linenum]
+        if not peer_median:
+            continue
+        for vendor, v in resolved.items():
+            if v["unit_cost"] not in (None, 0):
+                vendor_ratios[vendor].append(v["unit_cost"] / peer_median)
+
+    vendor_baseline_ratio: dict[str, float | None] = {
+        v: (statistics.median(ratios) if len(ratios) >= MIN_LINES_FOR_VENDOR_BASELINE else None)
+        for v, ratios in vendor_ratios.items()
+    }
+
+    # Pass 3: aggregate totals + flag every cell, now that peer medians
+    # and each vendor's baseline ratio are both known.
+    vendor_totals = {v: 0.0 for v in submitting_vendors}
+    vendor_unquoted = {v: 0 for v in submitting_vendors}
+    vendor_errors = {v: 0 for v in submitting_vendors}
+    vendor_outliers = {v: 0 for v in submitting_vendors}
+    vendor_zero_price = {v: 0 for v in submitting_vendors}
+
+    all_lines: list[ComparisonLine] = []
+    for linenum in sorted(resolved_by_line.keys()):
+        resolved = resolved_by_line[linenum]
+        canonical = canonical_by_line[linenum]
+        canonical_qty = float(canonical.ORDERQTY) if canonical.ORDERQTY is not None else None
+        peer_median = peer_median_by_line[linenum]
+
+        real_line_costs = [v["line_cost"] for v in resolved.values() if v["line_cost"] not in (None, 0)]
         min_line_cost = min(real_line_costs) if real_line_costs else None
 
         prices: dict[str, LinePrice] = {}
@@ -257,7 +346,10 @@ def build_comparison(rfqnum: str) -> dict:
             qty = v["qty"]
             corrected = v["corrected"]
 
-            unquoted = unit_cost is None
+            # Original round: no independently-entered unit cost means
+            # genuinely unquoted. Round-scoped view: unit_cost is derived
+            # from line_cost, so line_cost is the real signal instead.
+            unquoted = (unit_cost is None) if is_original else (line_cost is None)
             zero_price = (not corrected) and unit_cost is not None and unit_cost == 0
             is_lowest = (
                 line_cost is not None
@@ -266,20 +358,24 @@ def build_comparison(rfqnum: str) -> dict:
                 and line_cost == min_line_cost
             )
             arithmetic_error = (
-                not corrected
+                is_original
+                and not corrected
                 and unit_cost is not None
                 and line_cost is not None
                 and qty is not None
                 and abs(line_cost - qty * unit_cost) > ARITHMETIC_TOLERANCE
             )
-            outlier = (
+
+            baseline = vendor_baseline_ratio.get(vendor)
+            outlier = False
+            if (
                 not corrected
-                and unit_cost is not None
-                and unit_cost != 0
-                and median_unit_cost is not None
-                and median_unit_cost != 0
-                and abs(unit_cost - median_unit_cost) / median_unit_cost > OUTLIER_DEVIATION
-            )
+                and unit_cost not in (None, 0)
+                and peer_median
+                and baseline
+            ):
+                ratio = unit_cost / peer_median
+                outlier = abs(ratio - baseline) / baseline > OUTLIER_DEVIATION
 
             if unquoted:
                 vendor_unquoted[vendor] += 1
@@ -340,6 +436,8 @@ def build_comparison(rfqnum: str) -> dict:
 
     return {
         "rfqnum": rfqnum,
+        "round": selected_round,
+        "rounds_present": rounds_present,
         "total_line_count": total_line_count,
         "truncated": truncated,
         "vendors": [asdict(v) for v in vendors],
@@ -349,5 +447,5 @@ def build_comparison(rfqnum: str) -> dict:
 
 
 @router.get("/rfqs/{rfqnum}/comparison")
-async def get_comparison(rfqnum: str):
-    return build_comparison(rfqnum)
+async def get_comparison(rfqnum: str, round: str | None = None):
+    return build_comparison(rfqnum, round_label=round)

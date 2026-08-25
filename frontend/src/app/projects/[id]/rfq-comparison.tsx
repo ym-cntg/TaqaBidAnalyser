@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { createCorrection, getComparison, type ComparisonLinePrice, type ComparisonResponse } from "@/lib/api";
 import { formatAED, formatNumber } from "@/lib/format";
 import { getCachedIdentity } from "@/lib/identity";
+import { formatRoundLabel } from "@/lib/rounds";
 
 function vendorLabel(vendor: string, name: string | null): string {
   return name ?? vendor;
@@ -36,6 +37,7 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
   const [status, setStatus] = useState<"loading" | "ok" | "error">("loading");
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
+  const [round, setRound] = useState<string | undefined>(undefined);
 
   const [editing, setEditing] = useState<EditTarget | null>(null);
   const [editValue, setEditValue] = useState("");
@@ -43,11 +45,12 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
   const [editError, setEditError] = useState<string | null>(null);
 
   const identity = getCachedIdentity();
+  const isOriginalRound = !round || round === "original";
 
-  function load() {
+  function load(forRound?: string) {
     setStatus("loading");
     setError(null);
-    return getComparison(rfqnum)
+    return getComparison(rfqnum, forRound)
       .then((res) => {
         setData(res);
         setStatus("ok");
@@ -59,9 +62,16 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
   }
 
   useEffect(() => {
+    setRound(undefined);
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rfqnum]);
+
+  function changeRound(newRound: string) {
+    setRound(newRound);
+    setEditing(null);
+    load(newRound);
+  }
 
   function startEdit(rfqlinenum: number, vendor: string, currentUnitCost: number | null) {
     setEditing({ rfqlinenum, vendor });
@@ -134,6 +144,32 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
 
   return (
     <div className="space-y-6">
+      {/* Round selector */}
+      {data.rounds_present.length > 1 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border/60 bg-muted/20 px-4 py-3">
+          <label htmlFor="round-select" className="text-sm font-medium">
+            Round
+          </label>
+          <select
+            id="round-select"
+            value={data.round}
+            onChange={(e) => changeRound(e.target.value)}
+            className="h-8 rounded-lg border border-border bg-background px-2 text-sm"
+          >
+            {data.rounds_present.map((r) => (
+              <option key={r} value={r}>
+                {formatRoundLabel(r)}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-muted-foreground">
+            {isOriginalRound
+              ? "Prices as originally quoted. A line not yet revised in a later round carries this value forward."
+              : "Post-discount prices as of this round. Unit rates are derived (line total ÷ qty) since this round's data only carries a line total, so arithmetic-error checks and manual corrections are original-round only. A line not revised at this round carries forward its last known value."}
+          </p>
+        </div>
+      )}
+
       {/* Contract totals */}
       <div className="rounded-xl border border-border/60 shadow-sm overflow-hidden">
         <table className="w-full text-sm">
@@ -209,9 +245,14 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
         className="w-full md:w-80 rounded-lg border border-input bg-background px-4 py-2 text-sm shadow-sm transition-colors focus:outline-none focus:ring-3 focus:ring-ring/50 focus:border-ring"
       />
 
-      {!identity && (
+      {!identity && isOriginalRound && (
         <p className="text-xs text-muted-foreground">
           Visit the Projects page first to identify yourself before correcting prices.
+        </p>
+      )}
+      {!isOriginalRound && (
+        <p className="text-xs text-muted-foreground">
+          Switch to the Original round to correct a price.
         </p>
       )}
 
@@ -225,13 +266,15 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
           <span className="inline-block w-2 h-2 rounded-full bg-red-500" />
           Priciest on line
         </span>
-        <span className="flex items-center gap-1">
-          <span className="inline-block w-2 h-2 rounded-full bg-orange-500" />
-          Arithmetic error (qty × unit rate ≠ line total)
-        </span>
+        {isOriginalRound && (
+          <span className="flex items-center gap-1">
+            <span className="inline-block w-2 h-2 rounded-full bg-orange-500" />
+            Arithmetic error (qty × unit rate ≠ line total)
+          </span>
+        )}
         <span className="flex items-center gap-1">
           <span className="inline-block w-2 h-2 rounded-full bg-purple-500" />
-          Outlier (far from other bidders on this line)
+          Outlier (unusual for this vendor vs. their own typical pricing)
         </span>
         <span className="flex items-center gap-1">
           <span className="inline-block w-2 h-2 rounded-full bg-slate-400" />
@@ -241,7 +284,7 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
           <span className="text-amber-500 font-mono font-semibold">*</span>
           Manually corrected
         </span>
-        {identity && (
+        {identity && isOriginalRound && (
           <span className="flex items-center gap-1">
             <Pencil className="w-3 h-3" />
             Hover a price to correct it
@@ -311,7 +354,7 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
                         key={v.vendor}
                         p={line.prices[v.vendor]}
                         colorClass={priceColor(line.prices[v.vendor]?.line_cost ?? null, lineCosts)}
-                        editable={!!identity}
+                        editable={!!identity && isOriginalRound}
                         isEditing={editing?.rfqlinenum === line.rfqlinenum && editing?.vendor === v.vendor}
                         editValue={editValue}
                         onEditValueChange={setEditValue}

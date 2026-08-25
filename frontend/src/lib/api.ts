@@ -160,6 +160,8 @@ export interface NotSubmittedVendor {
 
 export interface ComparisonResponse {
   rfqnum: string;
+  round: string;
+  rounds_present: string[];
   total_line_count: number;
   truncated: boolean;
   vendors: ComparisonVendor[];
@@ -167,8 +169,9 @@ export interface ComparisonResponse {
   lines: ComparisonLine[];
 }
 
-export async function getComparison(rfqnum: string): Promise<ComparisonResponse> {
-  const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqnum)}/comparison`);
+export async function getComparison(rfqnum: string, round?: string): Promise<ComparisonResponse> {
+  const qs = round ? `?round=${encodeURIComponent(round)}` : "";
+  const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqnum)}/comparison${qs}`);
   return handleJson<ComparisonResponse>(res);
 }
 

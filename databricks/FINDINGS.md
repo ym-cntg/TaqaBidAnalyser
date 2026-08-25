@@ -1069,18 +1069,39 @@ model is ever preferred: `databricks-gpt-oss-120b`
 (`https://adb-3103344838598474.14.azuredatabricks.net/serving-endpoints/databricks-gpt-oss-120b/invocations`).
 
 This closes the "does a usable endpoint exist" half of the original open
-question. **Still unconfirmed**: whether the *app's own service
-principal* (not the notebook's interactive user identity used in the
-test above) has "Can Query" permission on this endpoint — foundation
-model endpoints are workspace-shared, but per-principal query grants are
-typically still enforced the same as for a custom-deployed endpoint. The
-notebook test used the calling *user's* auto-injected token
-(`dbutils...apiToken()`), which is a different identity than whatever the
-deployed app authenticates as (`WorkspaceClient()`'s auto-detected
-Databricks Apps credentials, per `backend/db.py`'s existing pattern) — so
-this still needs a real deploy to confirm the service principal itself
-isn't blocked. If it 502s with `api_error` after deploy, this grant is
-the first thing to check.
+question. **Now also confirmed (2026-08-25): the deployed app's own
+service principal has query access.** A real deploy against `N-19281`
+returned a genuine model response (not a 503/`api_error`) — the
+remaining open question from this section (whether the app's identity,
+as opposed to the notebook's interactive user, could query the endpoint)
+is resolved. It surfaced a different, real bug instead — see below.
+
+**Real-deploy bug found and fixed: output truncation on RFQs with more
+than a couple of vendors.** The first live run (`N-19281`, 9 submitting
+vendors — see the "Flagship demo example" section above) came back with
+`parse_error: Expecting ',' delimiter: line 63 column 6 (char 3986)`.
+This was not a malformed-response case in the sense the safety net was
+built for -- the model's JSON was simply cut off mid-generation before
+it could close its brackets, because `MAX_TOKENS` was set to `1200` and
+a full structured response (executive_summary + one observation object
+with a note and talking_points *per vendor*) for 9 vendors comfortably
+exceeds that budget. Fixed two ways: bumped `MAX_TOKENS` to `4096`
+(comfortable headroom even for a large invited-vendor RFQ like
+D-111808's 22), and tightened the system prompt to explicitly cap each
+vendor's `note` to one sentence and `talking_points` to at most 2
+bullets "however many vendors there are" — bounding output growth
+per-vendor, not just raising the ceiling, so this doesn't quietly
+resurface on an even larger RFQ. Deliberately did **not** add any
+JSON-repair/best-effort-parsing logic for a truncated response — the
+existing "hard failure on bad shape, never render malformed output"
+design (see the guardrails list below) is the correct behavior when
+truncation does happen; the fix is preventing truncation, not tolerating
+it. Verified in the scratchpad with a 9-vendor fixture (mirroring
+`N-19281`): a well-formed response now confirms `max_tokens=4096` is
+actually what gets sent to the SDK, and a deliberately truncated
+response (chopped mid-array, simulating the exact failure mode above)
+still fails cleanly with `parse_error` rather than crashing or rendering
+partial data.
 
 **Guardrails actually implemented** (mapping directly to the AIA
 governance conversation that prompted this feature):

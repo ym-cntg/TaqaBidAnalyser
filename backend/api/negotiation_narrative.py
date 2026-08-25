@@ -31,20 +31,25 @@ from backend.api.negotiation_report import build_negotiation_report
 
 router = APIRouter()
 
-MAX_TOKENS = 1200
+MAX_TOKENS = 4096
 TEMPERATURE = 0.3
 
 _SYSTEM_PROMPT = (
     "You are assisting a procurement analyst reviewing a construction tender bid "
     "comparison for TAQA/ADDC (Abu Dhabi power distribution utility). You will be given "
     "a structured digest of vendor pricing and flagged issues, already computed by the "
-    "analysis pipeline. Do not invent any vendor, number, or fact not present in the "
-    "digest. Do not recommend an award decision -- only describe what the data shows. "
-    "Return ONLY a single JSON object, no other text, with exactly this shape: "
+    "analysis pipeline, for every vendor on this RFQ -- there may be many. Do not invent "
+    "any vendor, number, or fact not present in the digest. Do not recommend an award "
+    "decision -- only describe what the data shows. Keep every vendor's note to exactly "
+    "one sentence and talking_points to at most 2 short bullets, however many vendors "
+    "there are -- the response must stay well within the output token budget regardless "
+    "of vendor count. Return ONLY a single JSON object, no other text, no markdown code "
+    "fences, with exactly this shape: "
     '{"executive_summary": "2-4 sentence overview of the bidding landscape", '
     '"observations": [{"vendor": "<must be one of the vendor codes given>", '
-    '"note": "1-2 sentence read on this vendor", '
-    '"talking_points": ["specific, factual point tied to a flag or number"]}], '
+    '"note": "exactly 1 sentence read on this vendor", '
+    '"talking_points": ["specific, factual point tied to a flag or number", '
+    '"(at most 1 more)"]}], '
     '"caveats": ["anything the analyst should be cautious about"]}'
 )
 

@@ -111,10 +111,13 @@ deterministic safety net strips (and logs as a caveat) any observation
 referencing a vendor that isn't actually in this RFQ's real data, so a
 hallucination can't slip through silently. `DATABRICKS_LLM_ENDPOINT` is
 set in `app.yaml` to `databricks-claude-haiku-4-5` — a Databricks-hosted
-foundation model endpoint, confirmed working via a direct notebook test
-against the real workspace (**still unconfirmed**: whether the deployed
-app's own service principal, as opposed to the notebook's interactive
-user, has query permission on it). See `databricks/FINDINGS.md`'s "App
+foundation model endpoint, **confirmed working end-to-end on a real
+deploy** (the app's own service principal does have query access). That
+first live run also surfaced a real bug — a 9-vendor RFQ's response got
+truncated before finishing valid JSON at the original 1200-token budget
+— fixed by raising the budget and capping each vendor's write-up length
+in the prompt so output size stays bounded regardless of vendor count.
+See `databricks/FINDINGS.md`'s "App
 implementation" section for the verified SDK call shape and the full
 guardrails list.
 

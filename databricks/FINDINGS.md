@@ -978,6 +978,16 @@ each vendor's `"original"` point should match their `contract_total` in
 `GET /api/rfqs/N-19535/comparison` exactly (both derive from the same
 `quotationline.LINECOST` sum).
 
+**Vendor-name fix (2026-08-26)**: `RoundFlag` only ever carried the bare
+`VENDOR` code, unlike its sibling `VendorRoundTrend` (which already had
+`name`) — the "Anomalous movement flags" table rendered raw codes like
+`99134662` with no company name anywhere nearby, unreadable to an
+analyst who doesn't have vendor codes memorized. Added a `name` field to
+`RoundFlag`, populated from the same `vendor_names` roster lookup
+`build_round_trend()` already fetches for the vendor-trend list, and
+wired the frontend flags table to render it through the same
+`vendorLabel()` helper the rest of the tab already uses.
+
 ### App implementation: negotiation-prep export (`backend/api/negotiation_report.py`)
 
 Closes CLAUDE.md's manual-process step 6 ("prepare negotiation notes per
@@ -1013,6 +1023,13 @@ project per `CLAUDE.md`'s tooling notes, but was only present in
 dependency). Two sheets: `Summary` (one row per vendor, ranked) and
 `Issues` (every vendor's top issues, flattened) — no per-lot sheets like
 the original build's export, since lots don't exist in real data.
+
+**Vendor-name fix (2026-08-26)**: the `Issues` sheet only had a `Vendor`
+(code) column, unlike `Summary` right next to it which already has both
+`Vendor` and `Name` — an analyst opening this export to prep negotiation
+notes would see bare codes on every issue row with no name in sight.
+Added a `Name` column to `Issues`, sourced from the same per-vendor
+`name` already present in the digest (no new query needed).
 
 **Known-value spot check** once deployed: `GET
 /api/rfqs/N-19535/negotiation-report` should rank the same vendors
@@ -1170,6 +1187,15 @@ vendors that also appear in `GET /api/rfqs/N-19535/negotiation-report`'s
 `vendors` list — if the response ever includes a `caveats` entry about a
 stripped vendor, that's the safety net catching a real hallucination, not
 a bug.
+
+**Vendor-name fix (2026-08-26)**: the submitting-vendors block of
+`_build_user_prompt` already included each vendor's resolved name
+alongside its code, but the `not_submitted` line right below it
+(`"Invited but did not submit any pricing: ..."`) discarded `name` and
+only listed bare codes — inconsistent within the same prompt, and meant
+the model could only ever refer to a non-submitting vendor by its code.
+Fixed to match the submitting-vendors format (`code (name)`, falling
+back to `"name unresolved"`), same as everywhere else in this app.
 
 **Dev-environment note, unrelated to this feature but worth recording**:
 while visually verifying this card, `next dev` (Turbopack) served pages

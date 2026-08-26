@@ -226,7 +226,7 @@ export function RoundTracking({ rfqnum }: { rfqnum: string }) {
                         {f.severity}
                       </Badge>
                     </td>
-                    <td className="px-2 py-1.5">{f.vendor}</td>
+                    <td className="px-2 py-1.5">{vendorLabel(f.vendor, f.name)}</td>
                     <td className="px-2 py-1.5 font-mono text-xs">{f.rfqlinenum}</td>
                     <td className="max-w-[500px] px-2 py-1.5 text-xs text-muted-foreground">
                       {f.description && <span className="text-foreground">{f.description}: </span>}

@@ -224,6 +224,7 @@ export interface VendorRoundTrend {
 export interface RoundFlag {
   severity: "critical" | "warning";
   vendor: string;
+  name: string | null;
   rfqlinenum: number;
   description: string | null;
   detail: string;

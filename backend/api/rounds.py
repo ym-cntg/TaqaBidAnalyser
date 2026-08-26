@@ -52,6 +52,7 @@ class VendorRoundTrend:
 class RoundFlag:
     severity: str  # "critical" | "warning"
     vendor: str
+    name: str | None
     rfqlinenum: float
     description: str | None
     detail: str
@@ -152,6 +153,7 @@ def build_round_trend(rfqnum: str) -> dict:
                         RoundFlag(
                             severity="critical",
                             vendor=v,
+                            name=vendor_names.get(v),
                             rfqlinenum=linenum,
                             description=line_descriptions.get(linenum),
                             detail=(
@@ -184,6 +186,7 @@ def build_round_trend(rfqnum: str) -> dict:
                         RoundFlag(
                             severity="warning",
                             vendor=v,
+                            name=vendor_names.get(v),
                             rfqlinenum=linenum,
                             description=line_descriptions.get(linenum),
                             detail=(

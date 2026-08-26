@@ -263,14 +263,14 @@ def _build_excel(report: dict) -> BytesIO:
             cell.number_format = "#,##0"
 
     ws_issues = wb.create_sheet("Issues")
-    ws_issues.append(["Vendor", "Source", "Severity", "Line", "Description", "Detail"])
+    ws_issues.append(["Vendor", "Name", "Source", "Severity", "Line", "Description", "Detail"])
     for cell in ws_issues[1]:
         cell.font = Font(bold=True)
     for v in report["vendors"]:
         for issue in v["top_issues"]:
             ws_issues.append(
                 [
-                    v["vendor"], issue["source"], issue["severity"], issue["rfqlinenum"],
+                    v["vendor"], v["name"] or "", issue["source"], issue["severity"], issue["rfqlinenum"],
                     issue["description"] or "", issue["detail"],
                 ]
             )

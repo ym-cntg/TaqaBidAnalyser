@@ -103,7 +103,10 @@ def _build_user_prompt(report: dict) -> str:
         for issue in v["top_issues"]:
             lines.append(f"    - line {issue['rfqlinenum']}: {issue['detail']}")
 
-    not_submitted = ", ".join(v["vendor"] for v in report["not_submitted"]) or "none"
+    not_submitted = (
+        ", ".join(f"{v['vendor']} ({v['name'] or 'name unresolved'})" for v in report["not_submitted"])
+        or "none"
+    )
 
     return (
         f"RFQ {report['rfqnum']}. Vendors, ranked by contract total (lowest first):\n"

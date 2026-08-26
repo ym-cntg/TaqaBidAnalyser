@@ -52,11 +52,14 @@ lot rollup** — just contract totals — since lots aren't modeled anywhere
 in the real schema. Vendor names are resolvable via a `companies` table
 (`companies.company = rfqvendor.VENDOR`) — unverified fully-qualified
 location, first real use of this table. Pure read, so it works
-independent of the Projects write-grant status. The outlier check was
-redesigned to compare each line against a vendor's *own* typical
-pricing pattern rather than the raw peer median — the old version
-flagged a consistently pricier or cheaper vendor on nearly every line,
-which was just their overall price level, not a real anomaly. See
+independent of the Projects write-grant status. The outlier check
+compares each line against a vendor's *own* typical pricing pattern
+(a median/MAD-based z-score, threshold 3) rather than the raw peer
+median — an earlier flat version flagged a consistently pricier or
+cheaper vendor on nearly every line, which was just their overall price
+level, not a real anomaly. A line can never show more than one outlier
+— if two vendors both deviate on the same line, only the stronger
+signal is flagged. See
 `databricks/FINDINGS.md`'s "App implementation" section for flag
 thresholds and the known-value spot check.
 

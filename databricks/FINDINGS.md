@@ -786,34 +786,73 @@ this is the most likely thing to need iteration):
 - **Unquoted**: a vendor has no `quotationline` row for a given
   `RFQLINENUM`, or has one with a null `UNITCOST`.
 - **Arithmetic error**: `abs(LINECOST - ORDERQTY * UNITCOST) > 0.01`.
-- **Outlier — redesigned 2026-08-25, see below**: the original version
-  flagged any line where `abs(UNITCOST - peer_median) / peer_median >
-  0.5`. That flat check turned out to be badly noisy on real bidder
-  behavior: a vendor who's simply priced consistently higher or lower
-  than the group across the *whole* BOQ (real construction bidders often
-  differ 2-3x overall) got "outlier" on nearly every single line — that's
-  just their overall price level, not a per-line anomaly, and it flooded
-  the UI with flags. Replaced with a two-pass, vendor-relative check:
-  for every line with ≥3 real quotes, compute `ratio = unit_cost /
-  peer_median`; for every vendor, compute their own `baseline_ratio =
-  median(ratio across every peer-comparable line they quoted)`, but only
-  if they have ≥`MIN_LINES_FOR_VENDOR_BASELINE` (5) such lines — too few
-  and they get no outlier flags at all, since there's no reliable
-  baseline to compare against. A line is only flagged if `abs(ratio -
-  baseline_ratio) / baseline_ratio > 0.5` — i.e. unusual **for that
-  vendor specifically**, not just "different from the group." This
-  directly targets CLAUDE.md's "unbalanced bidding" concept (a vendor
-  pricing one line very differently from their own normal pattern) while
-  no longer punishing a vendor for simply being a globally different
-  price level. Verified in the scratchpad with a fixture where one
-  vendor is consistently ~3x pricier and another ~0.7x cheaper across 8
-  lines, plus one vendor with a genuine one-line 10x spike: the redesign
-  gives the two consistently-priced vendors zero outlier flags and
-  correctly isolates the one real spike, whereas the old formula would
-  have flagged the consistently-pricier vendor on nearly every line. All
-  thresholds (`OUTLIER_DEVIATION = 0.5`, `OUTLIER_MIN_QUOTES = 3`,
-  `MIN_LINES_FOR_VENDOR_BASELINE = 5`) are still first-pass values, to be
-  tuned once this runs against real bidder data.
+- **Outlier — redesigned 2026-08-25, tightened to a z-score + a per-line
+  cap on 2026-08-26**: the original version flagged any line where
+  `abs(UNITCOST - peer_median) / peer_median > 0.5`. That flat check
+  turned out to be badly noisy on real bidder behavior: a vendor who's
+  simply priced consistently higher or lower than the group across the
+  *whole* BOQ (real construction bidders often differ 2-3x overall) got
+  "outlier" on nearly every single line — that's just their overall
+  price level, not a per-line anomaly, and it flooded the UI with flags.
+  Replaced with a vendor-relative check: for every line with ≥3 real
+  quotes, compute `ratio = unit_cost / peer_median`; for every vendor,
+  compute their own baseline from `ratio` across every peer-comparable
+  line they quoted, but only if they have ≥`MIN_LINES_FOR_VENDOR_BASELINE`
+  (5) such lines — too few and they get no outlier flags at all, since
+  there's no reliable baseline to compare against.
+
+  The baseline/threshold itself went through two iterations before
+  landing on the current one:
+  1. *Ratio-deviation* (`abs(ratio - median) / median > 0.5`) — the
+     first fix. Confirmed working (no longer flags a globally
+     pricier/cheaper vendor) but still a fairly loose 50% band, not a
+     real statistical test.
+  2. *Mean/stdev z-score* (tried, then rejected before shipping) —
+     switching to a literal z-score (`(ratio - mean) / stdev`,
+     threshold 3) per a stricter-flagging request. Scratchpad testing
+     caught a real problem before it shipped: a single huge outlier
+     inflates its own stdev enough to shrink its own z-score back under
+     the threshold ("masking") — the exact genuine spike this feature
+     exists to catch stopped being flagged at all once std-dev-based
+     z-scoring replaced the ratio-deviation check.
+  3. **Median/MAD modified z-score (shipped)** — `0.6745 * abs(ratio -
+     median) / MAD`, where `MAD = median(|ratio_i - median|)` across the
+     vendor's peer-comparable lines (the standard Iglewicz & Hoaglin
+     modified z-score; 0.6745 scales MAD to be comparable to a normal
+     distribution's stdev). Median/MAD barely moves for one extreme
+     point, so it doesn't get masked the way mean/stdev does. Flagged
+     only past `OUTLIER_Z_THRESHOLD = 3.0`. One more real wrinkle:
+     `MAD` can come out to exactly 0 when more than half a vendor's
+     historical ratios are (near-)identical — realistic for a vendor
+     who applies one consistent markup — which would otherwise divide
+     by zero or make any trivial wobble (even one caused by a *different*
+     vendor's spike shifting the peer median slightly) look infinitely
+     anomalous. Floored at `MAD_FLOOR_FRACTION = 0.03` (3%) of the
+     vendor's own baseline ratio to absorb that ordinary noise without
+     losing sensitivity to a real deviation.
+
+  **At most one outlier per line**: even after the above, it's possible
+  for two different vendors to each independently clear the z-threshold
+  on the same line (e.g. one vendor's genuine spike shifts the peer
+  median enough to also nudge a second, otherwise-normal vendor's ratio
+  past their own tighter threshold). Every vendor's z-score on a line is
+  now computed as a candidate first; only the single largest that clears
+  `OUTLIER_Z_THRESHOLD` is actually flagged, so a line can never show
+  more than one outlier.
+
+  This whole design directly targets CLAUDE.md's "unbalanced bidding"
+  concept (a vendor pricing one line very differently from their own
+  normal pattern), not just "different from the group." Verified in the
+  scratchpad with a fixture where one vendor is consistently ~3x pricier
+  and another ~0.7x cheaper across 8 lines (zero outlier flags for
+  either), one vendor has a genuine one-line 10x spike (still correctly
+  isolated despite the switch away from the masking-prone mean/stdev
+  version), and a 9th line deliberately engineered so two different
+  vendors both clear the z-threshold at once (confirmed only the
+  larger of the two gets flagged). All thresholds (`OUTLIER_MIN_QUOTES =
+  3`, `MIN_LINES_FOR_VENDOR_BASELINE = 5`, `OUTLIER_Z_THRESHOLD = 3.0`,
+  `MAD_FLOOR_FRACTION = 0.03`) are still first-pass values, to be tuned
+  once this runs against real bidder data.
 - **Did not submit** (distinct from "unquoted"): an invited vendor
   (present in `rfqvendor`) with zero `quotationline` rows for the whole
   RFQ at all — listed separately from the comparison table's vendor

@@ -48,13 +48,29 @@ router = APIRouter()
 
 LINES_CAP = 500
 ARITHMETIC_TOLERANCE = 0.01
-OUTLIER_DEVIATION = 0.5
 OUTLIER_MIN_QUOTES = 3
 # A vendor needs at least this many peer-comparable lines before we trust
 # a "typical ratio to the peer group" for them -- see the outlier note in
 # build_comparison() below for why this replaced a flat peer-deviation
 # check. First-pass value, tune later against real data.
 MIN_LINES_FOR_VENDOR_BASELINE = 5
+# Z-score threshold against a vendor's own historical ratio-to-peer-median
+# distribution -- stricter than the flat 50%-deviation check this
+# replaced, and only ever the single most extreme line per vendor's
+# distribution can cross it before also losing to another vendor's
+# stronger deviation on the same line (see the "at most one outlier per
+# line" cap below).
+OUTLIER_Z_THRESHOLD = 3.0
+# A floor on a vendor's own historical MAD (median absolute deviation),
+# expressed as a fraction of their baseline ratio. Without this, a
+# vendor whose historical ratio-to-peer-median happens to be extremely
+# tight (or, in a small sample, more than half identical) would see even
+# a trivial, insignificant wobble -- e.g. the peer median itself shifting
+# slightly because a *different* vendor spiked on that line -- divided by
+# a near-zero MAD and treated as infinitely anomalous. 3% is a first-pass
+# value: small enough to still catch a real anomaly, large enough that
+# ordinary noise doesn't get amplified into a false positive.
+MAD_FLOOR_FRACTION = 0.03
 
 
 @dataclass
@@ -282,10 +298,11 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
             )
         resolved_by_line[linenum] = resolved
 
-    # Pass 2: each vendor's own typical unit-cost-to-peer-median ratio.
+    # Pass 2: each vendor's own historical distribution of unit-cost-to-
+    # peer-median ratios.
     #
-    # The old check flagged a line whenever a vendor's unit cost was >50%
-    # away from that line's peer median -- but a vendor who's simply
+    # An earlier version flagged a line whenever a vendor's unit cost was
+    # >50% away from that line's peer median -- but a vendor who's simply
     # priced consistently higher (or lower) than the group across the
     # *whole* BOQ then gets "outlier" on nearly every single line, which
     # is just their overall price level, not a per-line anomaly. Real
@@ -296,10 +313,15 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
     # unusual **for them specifically** -- e.g. a vendor who's normally
     # right around the peer median but priced way off on one particular
     # line (a data-entry mistake, or the unbalanced/front-loaded pricing
-    # CLAUDE.md's manual process specifically calls out). A vendor with
-    # too few peer-comparable lines to establish a reliable baseline
-    # (MIN_LINES_FOR_VENDOR_BASELINE) gets no outlier flags at all rather
-    # than falling back to the old, noisier check.
+    # CLAUDE.md's manual process specifically calls out). This is now a
+    # real (modified) z-score against the vendor's own historical
+    # median/MAD of that ratio, flagged only past OUTLIER_Z_THRESHOLD --
+    # stricter than the old flat 50% check -- and at most one outlier per
+    # line ever gets surfaced (see the z_candidates cap below), even if
+    # more than one vendor's price happens to deviate on the same line. A
+    # vendor with too few peer-comparable lines to establish a reliable
+    # baseline (MIN_LINES_FOR_VENDOR_BASELINE) gets no outlier flags at
+    # all rather than a noisier fallback.
     peer_median_by_line: dict[float, float | None] = {}
     for linenum, resolved in resolved_by_line.items():
         real_costs = [v["unit_cost"] for v in resolved.values() if v["unit_cost"] not in (None, 0)]
@@ -316,10 +338,23 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
             if v["unit_cost"] not in (None, 0):
                 vendor_ratios[vendor].append(v["unit_cost"] / peer_median)
 
-    vendor_baseline_ratio: dict[str, float | None] = {
-        v: (statistics.median(ratios) if len(ratios) >= MIN_LINES_FOR_VENDOR_BASELINE else None)
-        for v, ratios in vendor_ratios.items()
-    }
+    # A plain mean/stdev z-score was tried first and rejected: it gets
+    # "masked" by the exact outlier it's trying to catch -- one huge
+    # deviation inflates its own stdev enough to shrink its own z-score
+    # back under the threshold. Median/MAD (a "modified z-score",
+    # Iglewicz & Hoaglin) resists that, since a single extreme point
+    # barely moves either the median or the median-of-deviations.
+    vendor_baseline_median: dict[str, float | None] = {}
+    vendor_baseline_mad: dict[str, float | None] = {}
+    for v, ratios in vendor_ratios.items():
+        if len(ratios) >= MIN_LINES_FOR_VENDOR_BASELINE:
+            median_ratio = statistics.median(ratios)
+            mad = statistics.median([abs(r - median_ratio) for r in ratios])
+            vendor_baseline_median[v] = median_ratio
+            vendor_baseline_mad[v] = max(mad, MAD_FLOOR_FRACTION * abs(median_ratio))
+        else:
+            vendor_baseline_median[v] = None
+            vendor_baseline_mad[v] = None
 
     # Pass 3: aggregate totals + flag every cell, now that peer medians
     # and each vendor's baseline ratio are both known.
@@ -338,6 +373,26 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
 
         real_line_costs = [v["line_cost"] for v in resolved.values() if v["line_cost"] not in (None, 0)]
         min_line_cost = min(real_line_costs) if real_line_costs else None
+
+        # At most one outlier per line: score every vendor's z-score
+        # candidate first, then keep only the single largest that clears
+        # the threshold -- even if more than one vendor's price happens
+        # to deviate from their own norm on the same line, only the
+        # strongest signal gets surfaced.
+        z_candidates: list[tuple[float, str]] = []
+        for vendor, v in resolved.items():
+            unit_cost = v["unit_cost"]
+            median_ratio = vendor_baseline_median.get(vendor)
+            mad = vendor_baseline_mad.get(vendor)
+            if v["corrected"] or unit_cost in (None, 0) or not peer_median or median_ratio is None or not mad:
+                continue
+            # 0.6745 scales MAD to be comparable to a standard deviation
+            # for normally-distributed data -- the standard modified
+            # z-score constant.
+            z = 0.6745 * abs((unit_cost / peer_median) - median_ratio) / mad
+            if z > OUTLIER_Z_THRESHOLD:
+                z_candidates.append((z, vendor))
+        outlier_vendor = max(z_candidates)[1] if z_candidates else None
 
         prices: dict[str, LinePrice] = {}
         for vendor, v in resolved.items():
@@ -366,16 +421,7 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
                 and abs(line_cost - qty * unit_cost) > ARITHMETIC_TOLERANCE
             )
 
-            baseline = vendor_baseline_ratio.get(vendor)
-            outlier = False
-            if (
-                not corrected
-                and unit_cost not in (None, 0)
-                and peer_median
-                and baseline
-            ):
-                ratio = unit_cost / peer_median
-                outlier = abs(ratio - baseline) / baseline > OUTLIER_DEVIATION
+            outlier = vendor == outlier_vendor
 
             if unquoted:
                 vendor_unquoted[vendor] += 1

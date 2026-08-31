@@ -1248,3 +1248,132 @@ stuck on every component's initial "Loading…" state). Using
 `http://localhost:3000` instead of `127.0.0.1` fixed it immediately. Not
 an app bug — just a trap worth avoiding in any future local verification
 session against `next dev`.
+
+### App implementation: Beta AI-estimated pricing (`backend/api/beta_pricing.py`)
+
+**A materially different, higher-risk AI feature than the narrative
+above — flagged to the user before building, built anyway per their
+explicit choice.** `POST /api/rfqs/{rfqnum}/comparison/beta` adds a
+"Beta" column to the BOQ Comparison table: an AI-estimated fair unit
+price per line, requested on the BOQ comparison page. Before writing any
+code, the user was asked (and answered) three design questions, because
+this is genuinely not the same risk shape as the negotiation narrative:
+
+1. **How should Beta be computed?** Two options were offered: (a)
+   stats-grounded — derive Beta from the real vendor quotes (e.g. peer
+   median), with the LLM only explaining/flagging, matching this app's
+   existing "never invent a number not in the data" rule; or (b) a pure
+   LLM estimate — the model freely estimates a price from its own
+   training knowledge, with vendor quotes given only as context, not a
+   formula. **The user explicitly chose (b)**, after being told the
+   real tradeoff: LLMs are not reliable at precise construction/BOQ unit
+   pricing, and this is the one place in the whole app where the model
+   is deliberately allowed to invent a number with no verifiable
+   grounding — the opposite of the narrative feature's core guardrail
+   ("do not invent any... number not present in the digest").
+2. **How should it be framed to the analyst?** The user chose "clearly
+   advisory/experimental" over "first-class benchmark column" — Beta is
+   never styled like a real vendor price (see the frontend section
+   below), and carries an explicit "not something to cite in a
+   negotiation" disclaimer next to the trigger button.
+3. **Persistence ("push it")?** The user chose "compute on demand,
+   don't persist" over writing to a new table — same pattern as the
+   narrative feature, no new Unity Catalog write grant needed.
+
+**Given the user's choice of (b), the guardrails that remain matter more,
+not less** — they're the only thing keeping an ungrounded number from
+being mistaken for a real one:
+
+- Every single per-line estimate carries a self-reported confidence
+  (`low`/`medium`/`high`) and a one-sentence rationale, both shown to
+  the analyst (as a tooltip on the cell) — an ungrounded number always
+  comes with an explicit signal of how unsure the model itself is.
+- **Safety net** (`_apply_safety_net`, same pattern as the narrative
+  feature's vendor-reference check): drops any estimate for a line
+  number that isn't actually in the batch it was given (blocks a
+  hallucinated line reference), drops anything that isn't a genuine
+  positive number, and — deliberately fails toward more caution, not
+  less — defaults an invalid or missing confidence value down to `low`
+  rather than ever silently upgrading it.
+- `beta_line_cost` is always computed in Python as `qty × beta_unit_cost`
+  using the BOQ's real quantity, never trusted from the model's own
+  arithmetic — the model only ever supplies the unit rate.
+- No award/recommendation framing anywhere — Beta is a price estimate,
+  not a decision, and (like the narrative feature) is never computed
+  automatically; it only ever runs when a user clicks "Generate Beta
+  prices."
+- Frontend: the Beta column sits to the right of every real vendor
+  column, is always italicized, and is styled by confidence level
+  (`CONFIDENCE_STYLE` in `rfq-comparison.tsx`) — it deliberately never
+  uses the green/red "cheapest/priciest" coloring real vendor cells get,
+  so it can never be visually mistaken for a real quote at a glance.
+
+**Batching, to avoid repeating the narrative feature's real truncation
+bug**: a BOQ can have up to 500 returned comparison lines (`comparison.py`'s
+`LINES_CAP`), and asking one Model Serving call for a structured estimate
++ rationale for that many lines in one shot is the same shape of risk
+that caused the narrative feature's real production truncation bug (see
+above) — just worse, since it scales with line count instead of vendor
+count. Beta is capped at `BETA_LINES_CAP = 60` lines per request and
+processed in sequential batches of `BETA_BATCH_SIZE = 20` lines each, so
+every single Model Serving call's expected output stays small and
+predictable regardless of how large the underlying BOQ is. A BOQ with
+more real lines than the cap comes back with `truncated: true` and the
+real `total_line_count`, mirroring `comparison.py`'s own truncation
+pattern. All three constants (plus `MAX_TOKENS = 2048`) are first-pass
+values, easy to raise later if real usage shows the cap is too tight.
+
+**Shared refactor**: both this feature and the negotiation narrative
+need "the configured Model Serving endpoint name, or a clean 503 if
+unset" — that lookup was pulled out of `negotiation_narrative.py` into a
+new small shared module, `backend/api/llm_client.py`, so there's exactly
+one place that owns the env var name and the not-configured error
+message. `negotiation_narrative.py` was refactored to use it too (no
+behavior change — verified by re-running its existing test suite after
+the refactor). The frontend's `NarrativeUnavailableError` was similarly
+renamed to `AiUnavailableError` in `lib/api.ts` and is now shared by both
+features' error handling.
+
+**Error taxonomy**: identical shape to the narrative feature —
+`not_configured` (missing env var) → 503; `api_error` (a batch's Model
+Serving call failed) and `parse_error` (a batch's response didn't match
+the expected JSON shape) → both 502. A failure on any one batch fails
+the whole request (no partial-results handling in this first pass) —
+simplest option, documented as a known limitation below rather than
+built out speculatively.
+
+**Verified in the scratchpad** (`TestClient` + a fake `WorkspaceClient`,
+same pattern as every other AI feature in this project): missing
+`DATABRICKS_LLM_ENDPOINT` → clean 503; a 25-line BOQ correctly triggers
+2 batched Model Serving calls (batch size 20); a hallucinated line
+number in the response is stripped; a negative price is dropped; an
+invalid confidence value (e.g. free text instead of one of the three
+allowed values) is defaulted to `low`; `beta_line_cost` is correctly
+derived from the BOQ's real quantity, not the model's own arithmetic; a
+70-line BOQ is correctly capped to exactly 60 estimated lines with
+`truncated: true` and the real 70 reported alongside it; malformed
+model output and a simulated permission failure both fail cleanly with
+`parse_error`/`api_error` rather than crashing. `negotiation_narrative.py`'s
+existing test suite was re-run after the `llm_client.py` extraction to
+confirm no behavior change. Frontend build/typecheck passed clean; a
+mock-backend Playwright walkthrough confirmed both the idle state (button
++ disclaimer, no extra column yet) and the loaded state (a distinctly
+styled "Beta (AI est.)" column, confidence-differentiated, never
+overlapping the real vendor columns' cheapest/priciest coloring).
+
+**Known limitations, by design or first-pass, not oversights**:
+- Beta has no grounding in real market rates or the BOQ's own vendor
+  quotes beyond "context" — it is, by the user's explicit choice, an
+  invented number. Treat it as a rough sanity-check prompt for a human,
+  never as a citable figure.
+- `BETA_LINES_CAP = 60` means a large BOQ (this project has confirmed
+  real examples up to 52,398 lines) only ever gets Beta estimates for a
+  small fraction of its lines per request — there is no "load more" or
+  pagination for this yet.
+- One failed batch fails the whole request, even if 2 of 3 batches
+  otherwise succeeded — no partial-results handling yet.
+- **This has not been through the same AI Impact Assessment / CoE
+  review the narrative feature went through** — given it's a
+  materially different risk category (an invented price figure, not a
+  description of real data), that review is a real open item before
+  this ships beyond internal testing, not just a formality.

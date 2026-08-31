@@ -19,7 +19,6 @@ business rule, only checked against one.
 """
 
 import json
-import os
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 
@@ -27,6 +26,7 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
 from fastapi import APIRouter, HTTPException
 
+from backend.api.llm_client import get_llm_endpoint_name
 from backend.api.negotiation_report import build_negotiation_report
 
 router = APIRouter()
@@ -72,21 +72,6 @@ class NarrativeReport:
 
 def _iso(dt) -> str:
     return dt.isoformat() if hasattr(dt, "isoformat") else str(dt)
-
-
-def _get_endpoint_name() -> str:
-    endpoint = os.environ.get("DATABRICKS_LLM_ENDPOINT")
-    if not endpoint:
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "not_configured: DATABRICKS_LLM_ENDPOINT is not set. Find (or create) a "
-                "Model Serving endpoint name under the workspace's Serving UI and set it "
-                "as this env var -- the app's service principal also needs 'Can Query' "
-                "permission granted on that endpoint."
-            ),
-        )
-    return endpoint
 
 
 def _build_user_prompt(report: dict) -> str:
@@ -154,7 +139,7 @@ def _apply_safety_net(parsed: dict, valid_vendors: set[str]) -> dict:
 
 @router.post("/rfqs/{rfqnum}/negotiation-report/narrative")
 async def generate_negotiation_narrative(rfqnum: str):
-    endpoint = _get_endpoint_name()
+    endpoint = get_llm_endpoint_name()
     report = build_negotiation_report(rfqnum)
 
     submitting_vendors = {v["vendor"] for v in report["vendors"]}

@@ -1,13 +1,29 @@
 "use client";
 
-import { Check, Pencil, X } from "lucide-react";
+import { Check, Pencil, Sparkles, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
-import { createCorrection, getComparison, type ComparisonLinePrice, type ComparisonResponse } from "@/lib/api";
+import { Button } from "@/components/ui/button";
+import {
+  AiUnavailableError,
+  createCorrection,
+  generateBetaPricing,
+  getComparison,
+  type BetaLineEstimate,
+  type ComparisonLinePrice,
+  type ComparisonResponse,
+} from "@/lib/api";
 import { formatAED, formatNumber } from "@/lib/format";
 import { getCachedIdentity } from "@/lib/identity";
 import { formatRoundLabel } from "@/lib/rounds";
+
+type BetaState =
+  | { status: "idle" }
+  | { status: "loading" }
+  | { status: "ok"; lines: Map<number, BetaLineEstimate>; truncated: boolean; totalLineCount: number; estimatedLineCount: number }
+  | { status: "not-configured"; message: string }
+  | { status: "error"; message: string };
 
 function vendorLabel(vendor: string, name: string | null): string {
   return name ?? vendor;
@@ -44,6 +60,8 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
+  const [betaState, setBetaState] = useState<BetaState>({ status: "idle" });
+
   const identity = getCachedIdentity();
   const isOriginalRound = !round || round === "original";
 
@@ -63,6 +81,7 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
 
   useEffect(() => {
     setRound(undefined);
+    setBetaState({ status: "idle" });
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rfqnum]);
@@ -70,7 +89,30 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
   function changeRound(newRound: string) {
     setRound(newRound);
     setEditing(null);
+    setBetaState({ status: "idle" });
     load(newRound);
+  }
+
+  function generateBeta() {
+    setBetaState({ status: "loading" });
+    generateBetaPricing(rfqnum, round)
+      .then((res) => {
+        const lines = new Map(res.lines.map((l) => [l.rfqlinenum, l]));
+        setBetaState({
+          status: "ok",
+          lines,
+          truncated: res.truncated,
+          totalLineCount: res.total_line_count,
+          estimatedLineCount: res.estimated_line_count,
+        });
+      })
+      .catch((err) => {
+        if (err instanceof AiUnavailableError && err.notConfigured) {
+          setBetaState({ status: "not-configured", message: err.message });
+        } else {
+          setBetaState({ status: "error", message: err instanceof Error ? err.message : String(err) });
+        }
+      });
   }
 
   function startEdit(rfqlinenum: number, vendor: string, currentUnitCost: number | null) {
@@ -298,6 +340,50 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
         </p>
       )}
 
+      {/* Beta (AI-estimated) pricing */}
+      <div className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3 space-y-2">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Sparkles className="h-4 w-4 text-primary" />
+            <span className="font-semibold text-sm">Beta — AI-estimated price</span>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={generateBeta}
+            disabled={betaState.status === "loading"}
+          >
+            <Sparkles className="h-4 w-4" />
+            {betaState.status === "ok" ? "Regenerate" : "Generate Beta prices"}
+          </Button>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          The model estimates a fair unit price per line from its own general knowledge, using the
+          vendor quotes only as context — not a market-rate lookup, not a benchmark, and not
+          something to cite in a negotiation. Always check the confidence level shown per line.
+        </p>
+        {betaState.status === "loading" && (
+          <p className="text-xs text-muted-foreground animate-pulse">Generating Beta estimates…</p>
+        )}
+        {betaState.status === "not-configured" && (
+          <p className="text-xs text-amber-600">Beta pricing isn&apos;t set up yet: {betaState.message}</p>
+        )}
+        {betaState.status === "error" && (
+          <div className="flex items-center gap-2">
+            <p className="text-xs text-red-600">{betaState.message}</p>
+            <Button variant="outline" size="sm" onClick={generateBeta}>
+              Try again
+            </Button>
+          </div>
+        )}
+        {betaState.status === "ok" && betaState.truncated && (
+          <p className="text-xs text-muted-foreground">
+            Beta estimates generated for the first {betaState.estimatedLineCount.toLocaleString()} of{" "}
+            {betaState.totalLineCount.toLocaleString()} lines.
+          </p>
+        )}
+      </div>
+
       {/* Line-item comparison */}
       <div className="rounded-xl border border-border/60 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
@@ -324,6 +410,14 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
                     {vendorLabel(v.vendor, v.name)}
                   </th>
                 ))}
+                {betaState.status === "ok" && (
+                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground w-32">
+                    <span className="inline-flex items-center gap-1 justify-end">
+                      <Sparkles className="h-3 w-3 text-primary" />
+                      Beta (AI est.)
+                    </span>
+                  </th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -365,6 +459,7 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
                         onCancel={cancelEdit}
                       />
                     ))}
+                    {betaState.status === "ok" && <BetaCell estimate={betaState.lines.get(line.rfqlinenum)} />}
                   </tr>
                 );
               })}
@@ -477,6 +572,29 @@ function PriceCell({
           )}
         </span>
       </span>
+    </td>
+  );
+}
+
+const CONFIDENCE_STYLE: Record<string, string> = {
+  low: "text-muted-foreground/60 italic",
+  medium: "text-muted-foreground italic",
+  high: "text-primary/80 italic",
+};
+
+// Deliberately never uses priceColor/green/red or plain, non-italic
+// text -- Beta must never look visually equivalent to a real vendor
+// quote, on any confidence level.
+function BetaCell({ estimate }: { estimate: BetaLineEstimate | undefined }) {
+  if (!estimate) {
+    return <td className="px-3 py-2 text-right font-mono text-xs text-muted-foreground/50 italic">—</td>;
+  }
+  return (
+    <td
+      className={`px-3 py-2 text-right font-mono text-xs ${CONFIDENCE_STYLE[estimate.confidence] ?? "italic"}`}
+      title={`${estimate.confidence} confidence — ${estimate.rationale}`}
+    >
+      {formatAED(estimate.beta_line_cost)}
     </td>
   );
 }

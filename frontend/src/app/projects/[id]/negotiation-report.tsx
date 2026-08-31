@@ -6,10 +6,10 @@ import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  AiUnavailableError,
   generateNegotiationNarrative,
   getNegotiationReport,
   negotiationReportExportUrl,
-  NarrativeUnavailableError,
   type NarrativeReport,
   type NegotiationReportResponse,
   type TopIssue,
@@ -44,7 +44,7 @@ function AiSummaryCard({ rfqnum, data }: { rfqnum: string; data: NegotiationRepo
     generateNegotiationNarrative(rfqnum)
       .then((report) => setState({ status: "ok", report }))
       .catch((err) => {
-        if (err instanceof NarrativeUnavailableError && err.notConfigured) {
+        if (err instanceof AiUnavailableError && err.notConfigured) {
           setState({ status: "not-configured", message: err.message });
         } else {
           setState({ status: "error", message: err instanceof Error ? err.message : String(err) });

@@ -124,10 +124,34 @@ See `databricks/FINDINGS.md`'s "App
 implementation" section for the verified SDK call shape and the full
 guardrails list.
 
+**Beta AI-estimated pricing built**, a "Beta" column on the BOQ
+Comparison table: an on-demand, per-line AI-estimated fair unit price,
+requested via a "Generate Beta prices" button. **A deliberately
+higher-risk AI feature than the narrative above** — flagged to the user
+before building, since it asks the model to invent a price from its own
+general knowledge (vendor quotes are given only as context, never as a
+formula), the opposite of the narrative feature's "never invent a number
+not in the data" rule. Built this way only after the user was told that
+tradeoff and explicitly chose it. Every estimate carries a self-reported
+confidence level and a one-line rationale, is capped and batched
+(`BETA_LINES_CAP`/`BETA_BATCH_SIZE` in `backend/api/beta_pricing.py`) to
+avoid repeating the narrative feature's real truncation bug at BOQ scale,
+and is never persisted or computed automatically. The frontend renders it
+in its own column, always italicized and confidence-styled, never using
+the green/red "cheapest/priciest" coloring real vendor prices get, so it
+can't be mistaken for a real quote. **Has not yet been through the AI
+Impact Assessment / CoE review the narrative feature went through** —
+a real open item, not a formality, given the different risk category.
+See `databricks/FINDINGS.md`'s "App implementation" section for the full
+design discussion and the three explicit choices the user made before
+this was built.
+
 - `backend/main.py` — app factory, mounts `rfqs`/`users`/`projects`/
-  `comparison`/`corrections`/`rounds`/`negotiation_report`/
+  `comparison`/`beta_pricing`/`corrections`/`rounds`/`negotiation_report`/
   `negotiation_narrative` routers; keeps `/api/rfq-count` as a
   lightweight connectivity smoke test.
+- `backend/api/llm_client.py` — shared Databricks Model Serving endpoint
+  config, used by both `negotiation_narrative.py` and `beta_pricing.py`.
 - `backend/db.py` — the SQL warehouse connection helper + shared
   `escape_sql_literal()`.
 - `backend/boq_classification.py` — the BOQ-category cache + thresholds,
@@ -139,6 +163,8 @@ guardrails list.
 - `backend/api/comparison.py` — `GET /api/rfqs/{rfqnum}/comparison`
   (+ `?round=`), the BOQ line-item comparison + commercial flags +
   corrections overlay.
+- `backend/api/beta_pricing.py` — `POST /api/rfqs/{rfqnum}/comparison/beta`,
+  the AI-estimated "Beta" price layer on top of the comparison above.
 - `backend/api/round_snapshots.py` — the shared forward-fill
   reconstruction (`build_round_snapshots()`) both `comparison.py`'s round
   selector and `rounds.py`'s trend chart are built on.

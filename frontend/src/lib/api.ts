@@ -300,7 +300,9 @@ export interface NarrativeReport {
 // (502 -- the model call failed, or came back in an unusable shape) so
 // the UI can show setup instructions instead of a raw error only in the
 // one case that's actually about configuration, not a real failure.
-export class NarrativeUnavailableError extends Error {
+// Shared by every AI feature (negotiation narrative, Beta pricing) --
+// the distinction isn't narrative-specific.
+export class AiUnavailableError extends Error {
   status: number;
   notConfigured: boolean;
 
@@ -317,7 +319,37 @@ export async function generateNegotiationNarrative(rfqnum: string): Promise<Narr
   });
   if (!res.ok) {
     const body = await res.json().catch(() => null);
-    throw new NarrativeUnavailableError(res.status, body?.detail ?? `Request failed with status ${res.status}`);
+    throw new AiUnavailableError(res.status, body?.detail ?? `Request failed with status ${res.status}`);
+  }
+  return res.json();
+}
+
+export interface BetaLineEstimate {
+  rfqlinenum: number;
+  beta_unit_cost: number;
+  beta_line_cost: number;
+  confidence: "low" | "medium" | "high";
+  rationale: string;
+}
+
+export interface BetaPricingResponse {
+  rfqnum: string;
+  round: string;
+  generated_at: string;
+  truncated: boolean;
+  total_line_count: number;
+  estimated_line_count: number;
+  lines: BetaLineEstimate[];
+}
+
+export async function generateBetaPricing(rfqnum: string, round?: string): Promise<BetaPricingResponse> {
+  const qs = round ? `?round=${encodeURIComponent(round)}` : "";
+  const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqnum)}/comparison/beta${qs}`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => null);
+    throw new AiUnavailableError(res.status, body?.detail ?? `Request failed with status ${res.status}`);
   }
   return res.json();
 }

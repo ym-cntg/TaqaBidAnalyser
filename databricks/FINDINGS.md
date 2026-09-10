@@ -4,6 +4,19 @@ Running log of what the real Unity Catalog tables (`ingestion_framework_test.bid
 actually contain, as notebooks get run and results come back. Updated as we
 go — treat anything marked "pending" as not yet confirmed.
 
+**Note (2026-09-10): the `databricks/notebooks/*.ipynb` files this document
+refers to no longer live on this branch** (`maximo-integrated-buildout`) —
+they were removed here because this branch is Git-folder-linked to a
+Databricks App deployment, and Databricks' sync-on-deploy step tries to
+re-import every `.ipynb` under the linked path as a native workspace
+notebook. One of them (`01_rfq.ipynb`, a genuine Databricks-native export
+with a large embedded output) failed that re-import validation and broke
+deployment; since none of these notebooks are read by the running app,
+the safe fix was to stop shipping them on the deployed branch rather than
+edit them. They're still fully intact on the `maximo-data-analysis`
+branch — this file's findings are unaffected, just the source notebooks
+they were extracted from live one branch over now.
+
 **Status: Run 2 complete for notebooks 01-04. Notebooks 07/08 (single-bid
 end-to-end traces) also complete for 07 and Part 1 of 08** — see the new
 section below for major corrections these surfaced (`BOQITEMNUM` is not how

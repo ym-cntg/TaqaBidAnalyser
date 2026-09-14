@@ -262,6 +262,11 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
                           {v.outlier_count} outlier{v.outlier_count > 1 ? "s" : ""}
                         </Badge>
                       )}
+                      {v.technically_disqualified_count > 0 && (
+                        <Badge className="bg-red-800 text-white">
+                          {v.technically_disqualified_count} disqualified
+                        </Badge>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -270,6 +275,13 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
           </tbody>
         </table>
       </div>
+
+      {data.vendors.some((v) => v.technically_disqualified_count > 0) && (
+        <p className="text-xs text-muted-foreground">
+          Contract totals above exclude any technically disqualified line — see the{" "}
+          <span className="text-red-800 font-medium">disqualified</span> marker in the table below.
+        </p>
+      )}
 
       {data.not_submitted.length > 0 && (
         <p className="text-xs text-muted-foreground">
@@ -321,6 +333,10 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
         <span className="flex items-center gap-1">
           <span className="inline-block w-2 h-2 rounded-full bg-slate-400" />
           AED 0 (likely missing)
+        </span>
+        <span className="flex items-center gap-1">
+          <span className="inline-block w-2 h-2 rounded-full bg-red-800" />
+          Technically disqualified (excluded from evaluation)
         </span>
         <span className="flex items-center gap-1">
           <span className="text-amber-500 font-mono font-semibold">*</span>
@@ -422,12 +438,13 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
             </thead>
             <tbody>
               {visibleLines.map((line) => {
-                // Cheapest/priciest coloring excludes zero-priced and
-                // unquoted cells -- same exclusion the backend already
-                // applies to is_lowest, kept consistent here.
+                // Cheapest/priciest coloring excludes zero-priced,
+                // unquoted, and technically disqualified cells -- same
+                // exclusions the backend already applies to is_lowest,
+                // kept consistent here.
                 const lineCosts = data.vendors.map((v) => {
                   const cellP = line.prices[v.vendor];
-                  if (!cellP || cellP.unquoted || cellP.zero_price) return null;
+                  if (!cellP || cellP.unquoted || cellP.zero_price || cellP.technically_disqualified) return null;
                   return cellP.line_cost;
                 });
                 return (
@@ -467,6 +484,49 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
           </table>
         </div>
       </div>
+
+      {/* Split-award total */}
+      {data.split_award_totals.length > 0 && (
+        <div className="rounded-xl border border-border/60 shadow-sm overflow-hidden">
+          <div className="px-4 pt-3 pb-1">
+            <h3 className="text-sm font-semibold">If split-awarded by line</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Each vendor&apos;s total if every line were awarded individually to whoever&apos;s cheapest
+              technically-accepted bidder on that specific line — not the same as Contract total above,
+              which is each vendor&apos;s own full bid across every line.
+            </p>
+          </div>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-muted/60 border-b border-border/60">
+                <th className="px-4 py-2 text-left text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Vendor
+                </th>
+                <th className="px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Lines won
+                </th>
+                <th className="px-4 py-2 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Split-award total
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {data.split_award_totals.map((s) => (
+                <tr key={s.vendor} className="border-t border-border/60 odd:bg-muted/[0.15]">
+                  <td className="px-4 py-2">
+                    <div className="font-medium">{vendorLabel(s.vendor, s.name)}</div>
+                    <div className="font-mono text-xs text-muted-foreground">{s.vendor}</div>
+                  </td>
+                  <td className="px-4 py-2 text-right font-mono text-xs">
+                    {s.line_count.toLocaleString()} of {data.total_line_count.toLocaleString()}
+                  </td>
+                  <td className="px-4 py-2 text-right font-mono font-semibold">{formatAED(s.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
     </div>
   );
 }
@@ -527,10 +587,13 @@ function PriceCell({
   }
 
   const empty = !p || p.unquoted;
+  const disqualified = !empty && p!.technically_disqualified;
 
   return (
     <td
-      className={`group/cell px-3 py-2 text-right font-mono text-xs ${empty ? "text-muted-foreground/50 italic" : colorClass}`}
+      className={`group/cell px-3 py-2 text-right font-mono text-xs ${
+        empty ? "text-muted-foreground/50 italic" : disqualified ? "text-red-800/70 line-through" : colorClass
+      }`}
     >
       <span className="inline-flex items-center gap-1 justify-end">
         {editable && (
@@ -541,6 +604,12 @@ function PriceCell({
           >
             <Pencil className="w-3 h-3" />
           </button>
+        )}
+        {disqualified && (
+          <span
+            className="inline-block w-1.5 h-1.5 rounded-full bg-red-800 shrink-0"
+            title="Technically disqualified -- excluded from commercial evaluation"
+          />
         )}
         {!empty && p!.arithmetic_error && (
           <span

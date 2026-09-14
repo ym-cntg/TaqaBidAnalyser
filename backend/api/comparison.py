@@ -20,6 +20,25 @@ its own, so it's only applied when viewing the original round -- reusing
 the same absolute price at every later round would misrepresent whatever
 negotiated discount happened after the correction was made.
 
+Technical disqualification (QL2 = "TNA"): a real stakeholder ask --
+technically-rejected line items must never factor into commercial
+evaluation. quotationline/altquotationline carry a QL2 status column
+confirmed as a real technical-acceptance field (see
+databricks/FINDINGS.md), with "TNA" ("Technically Not Accepted") as the
+one value treated as disqualifying here, per an explicit product
+decision -- Cancel/CNA/NOQUOTE are left as-is. **Caveat, built anyway per
+an explicit decision to not block on verifying it first**: QL2's value
+distribution was only confirmed on altquotationline (a smaller,
+non-construction sample) -- whether it's populated the same way on
+quotationline for a real detailed BOQ is unverified. _fetch_technical_status()
+is deliberately fail-open (same pattern as _fetch_corrections): if QL2
+doesn't exist or the query fails for any other reason, technical
+disqualification is simply never applied rather than breaking the whole
+comparison view. A disqualified cell is excluded from is_lowest,
+contract_total, the outlier baseline, and every other flag -- but still
+shown (not hidden like a corrected-away value), clearly marked, so the
+analyst can see why a real submitted price isn't in commercial play.
+
 Round-scoped view: DISCOUNTHISTORYLINE only carries a post-discount
 LINECOST (LINECOSTWDIS), no per-round unit rate, so a round other than
 "original" derives unit_cost = line_cost / qty (qty doesn't change
@@ -71,6 +90,9 @@ OUTLIER_Z_THRESHOLD = 3.0
 # value: small enough to still catch a real anomaly, large enough that
 # ordinary noise doesn't get amplified into a false positive.
 MAD_FLOOR_FRACTION = 0.03
+# QL2 values treated as a technical disqualification -- see the module
+# docstring for the real-data caveat and why only "TNA" is included.
+DISQUALIFYING_QL2_VALUES = {"TNA"}
 
 
 @dataclass
@@ -82,6 +104,7 @@ class LinePrice:
     arithmetic_error: bool
     outlier: bool
     zero_price: bool
+    technically_disqualified: bool
     corrected: bool
     corrected_by_label: str | None
     corrected_note: str | None
@@ -106,12 +129,21 @@ class VendorSummary:
     arithmetic_error_count: int
     outlier_count: int
     zero_price_count: int
+    technically_disqualified_count: int
 
 
 @dataclass
 class NotSubmittedVendor:
     vendor: str
     name: str | None
+
+
+@dataclass
+class SplitAwardTotal:
+    vendor: str
+    name: str | None
+    total: float
+    line_count: int
 
 
 def _iso(dt) -> str | None:
@@ -190,6 +222,30 @@ def _fetch_corrections(rfqnum: str) -> dict[tuple[float, str], object]:
     return latest
 
 
+def _fetch_technical_status(rfqnum: str) -> dict[tuple[float, str], str | None]:
+    """(rfqlinenum, vendor) -> QL2 status, or {} if the column doesn't
+    exist here or the query fails for any other reason. Deliberately
+    fail-open, same reasoning as _fetch_corrections: QL2's real-data
+    behavior on quotationline (as opposed to altquotationline, where it
+    was actually confirmed) is unverified -- see the module docstring.
+    The read-only comparison view must keep working regardless; an
+    unavailable technical-status column shouldn't take down a working
+    read path, it should just mean disqualification isn't applied."""
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT RFQLINENUM, VENDOR, QL2
+                    FROM {CATALOG}.{SCHEMA}.quotationline
+                    WHERE RFQNUM = '{escape_sql_literal(rfqnum)}'
+                    """
+                )
+                return {(row.RFQLINENUM, row.VENDOR): row.QL2 for row in cursor.fetchall()}
+    except Exception:
+        return {}
+
+
 def _fetch_user_names(user_ids: set[str]) -> dict[str, str]:
     if not user_ids:
         return {}
@@ -236,6 +292,10 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
 
     corrections = _fetch_corrections(rfqnum) if is_original else {}
     corrector_names = _fetch_user_names({c.corrected_by for c in corrections.values()})
+    # Technical status doesn't change round to round (it's locked before
+    # commercial negotiation even starts), so this is fetched once and
+    # applied regardless of which round is being viewed.
+    technical_status = _fetch_technical_status(rfqnum)
 
     lines_by_num: dict[float, list] = {}
     for row in rows:
@@ -287,10 +347,13 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
                 corrected_note = correction.note
                 corrected_at = _iso(correction.corrected_at)
 
+            technically_disqualified = technical_status.get((linenum, vendor)) in DISQUALIFYING_QL2_VALUES
+
             resolved[vendor] = dict(
                 unit_cost=unit_cost,
                 line_cost=line_cost,
                 qty=qty,
+                technically_disqualified=technically_disqualified,
                 corrected=corrected,
                 corrected_by_label=corrected_by_label,
                 corrected_note=corrected_note,
@@ -322,9 +385,16 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
     # vendor with too few peer-comparable lines to establish a reliable
     # baseline (MIN_LINES_FOR_VENDOR_BASELINE) gets no outlier flags at
     # all rather than a noisier fallback.
+    # A technically disqualified price is excluded from every one of
+    # these commercial computations, same as the stakeholder ask requires
+    # -- it never contributes to a peer median, a vendor's own baseline,
+    # or (further below) is_lowest/contract_total.
     peer_median_by_line: dict[float, float | None] = {}
     for linenum, resolved in resolved_by_line.items():
-        real_costs = [v["unit_cost"] for v in resolved.values() if v["unit_cost"] not in (None, 0)]
+        real_costs = [
+            v["unit_cost"] for v in resolved.values()
+            if v["unit_cost"] not in (None, 0) and not v["technically_disqualified"]
+        ]
         peer_median_by_line[linenum] = (
             statistics.median(real_costs) if len(real_costs) >= OUTLIER_MIN_QUOTES else None
         )
@@ -335,7 +405,7 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
         if not peer_median:
             continue
         for vendor, v in resolved.items():
-            if v["unit_cost"] not in (None, 0):
+            if v["unit_cost"] not in (None, 0) and not v["technically_disqualified"]:
                 vendor_ratios[vendor].append(v["unit_cost"] / peer_median)
 
     # A plain mean/stdev z-score was tried first and rejected: it gets
@@ -363,6 +433,7 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
     vendor_errors = {v: 0 for v in submitting_vendors}
     vendor_outliers = {v: 0 for v in submitting_vendors}
     vendor_zero_price = {v: 0 for v in submitting_vendors}
+    vendor_disqualified = {v: 0 for v in submitting_vendors}
 
     all_lines: list[ComparisonLine] = []
     for linenum in sorted(resolved_by_line.keys()):
@@ -371,7 +442,13 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
         canonical_qty = float(canonical.ORDERQTY) if canonical.ORDERQTY is not None else None
         peer_median = peer_median_by_line[linenum]
 
-        real_line_costs = [v["line_cost"] for v in resolved.values() if v["line_cost"] not in (None, 0)]
+        # A technically disqualified price is real (a vendor submitted it)
+        # but out of commercial play entirely -- excluded from is_lowest
+        # the same way it was excluded from the peer median above.
+        real_line_costs = [
+            v["line_cost"] for v in resolved.values()
+            if v["line_cost"] not in (None, 0) and not v["technically_disqualified"]
+        ]
         min_line_cost = min(real_line_costs) if real_line_costs else None
 
         # At most one outlier per line: score every vendor's z-score
@@ -384,7 +461,14 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
             unit_cost = v["unit_cost"]
             median_ratio = vendor_baseline_median.get(vendor)
             mad = vendor_baseline_mad.get(vendor)
-            if v["corrected"] or unit_cost in (None, 0) or not peer_median or median_ratio is None or not mad:
+            if (
+                v["corrected"]
+                or v["technically_disqualified"]
+                or unit_cost in (None, 0)
+                or not peer_median
+                or median_ratio is None
+                or not mad
+            ):
                 continue
             # 0.6745 scales MAD to be comparable to a standard deviation
             # for normally-distributed data -- the standard modified
@@ -400,14 +484,21 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
             line_cost = v["line_cost"]
             qty = v["qty"]
             corrected = v["corrected"]
+            technically_disqualified = v["technically_disqualified"]
 
             # Original round: no independently-entered unit cost means
             # genuinely unquoted. Round-scoped view: unit_cost is derived
             # from line_cost, so line_cost is the real signal instead.
+            # A disqualified vendor did submit a real price -- unquoted
+            # and technically_disqualified are independent, non-
+            # overlapping reasons a cell might be excluded from play.
             unquoted = (unit_cost is None) if is_original else (line_cost is None)
-            zero_price = (not corrected) and unit_cost is not None and unit_cost == 0
+            zero_price = (
+                not corrected and not technically_disqualified and unit_cost is not None and unit_cost == 0
+            )
             is_lowest = (
-                line_cost is not None
+                not technically_disqualified
+                and line_cost is not None
                 and line_cost != 0
                 and min_line_cost is not None
                 and line_cost == min_line_cost
@@ -415,6 +506,7 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
             arithmetic_error = (
                 is_original
                 and not corrected
+                and not technically_disqualified
                 and unit_cost is not None
                 and line_cost is not None
                 and qty is not None
@@ -425,7 +517,12 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
 
             if unquoted:
                 vendor_unquoted[vendor] += 1
-            if line_cost is not None:
+            if technically_disqualified:
+                vendor_disqualified[vendor] += 1
+            # A disqualified line is out of commercial evaluation
+            # entirely -- per the stakeholder ask, its cost never
+            # contributes to the vendor's contract total.
+            if line_cost is not None and not technically_disqualified:
                 vendor_totals[vendor] += line_cost
             if arithmetic_error:
                 vendor_errors[vendor] += 1
@@ -442,6 +539,7 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
                 arithmetic_error=arithmetic_error,
                 outlier=outlier,
                 zero_price=zero_price,
+                technically_disqualified=technically_disqualified,
                 corrected=corrected,
                 corrected_by_label=v["corrected_by_label"],
                 corrected_note=v["corrected_note"],
@@ -462,6 +560,22 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
     truncated = total_line_count > LINES_CAP
     returned_lines = all_lines[:LINES_CAP]
 
+    # Split-award total: if every line were awarded individually to
+    # whoever's cheapest technically-accepted bidder on that specific
+    # line (is_lowest, computed above), what would each vendor actually
+    # get paid? Always computed over the *full* line set (all_lines),
+    # never just the returned/truncated page, same invariant as every
+    # other aggregate in this function. On the rare exact tie for
+    # cheapest, every tied vendor is credited for that line -- there's no
+    # principled way to pick a single "winner" between two identical
+    # prices, so this stays honest about the tie rather than guessing.
+    split_award: dict[str, dict] = {v: {"total": 0.0, "line_count": 0} for v in submitting_vendors}
+    for line in all_lines:
+        for vendor, price in line.prices.items():
+            if price.is_lowest:
+                split_award[vendor]["total"] += price.line_cost
+                split_award[vendor]["line_count"] += 1
+
     vendors = [
         VendorSummary(
             vendor=v,
@@ -471,6 +585,7 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
             arithmetic_error_count=vendor_errors[v],
             outlier_count=vendor_outliers[v],
             zero_price_count=vendor_zero_price[v],
+            technically_disqualified_count=vendor_disqualified[v],
         )
         for v in sorted(submitting_vendors)
     ]
@@ -478,6 +593,15 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
         NotSubmittedVendor(vendor=v, name=name)
         for v, name in sorted(vendor_names.items())
         if v not in submitting_vendors
+    ]
+    split_award_totals = [
+        SplitAwardTotal(
+            vendor=v,
+            name=vendor_names.get(v),
+            total=split_award[v]["total"],
+            line_count=split_award[v]["line_count"],
+        )
+        for v in sorted(submitting_vendors)
     ]
 
     return {
@@ -488,6 +612,7 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
         "truncated": truncated,
         "vendors": [asdict(v) for v in vendors],
         "not_submitted": [asdict(v) for v in not_submitted],
+        "split_award_totals": [asdict(s) for s in split_award_totals],
         "lines": [asdict(l) for l in returned_lines],
     }
 

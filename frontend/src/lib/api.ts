@@ -129,6 +129,7 @@ export interface ComparisonLinePrice {
   arithmetic_error: boolean;
   outlier: boolean;
   zero_price: boolean;
+  technically_disqualified: boolean;
   corrected: boolean;
   corrected_by_label: string | null;
   corrected_note: string | null;
@@ -151,11 +152,19 @@ export interface ComparisonVendor {
   arithmetic_error_count: number;
   outlier_count: number;
   zero_price_count: number;
+  technically_disqualified_count: number;
 }
 
 export interface NotSubmittedVendor {
   vendor: string;
   name: string | null;
+}
+
+export interface SplitAwardTotal {
+  vendor: string;
+  name: string | null;
+  total: number;
+  line_count: number;
 }
 
 export interface ComparisonResponse {
@@ -166,6 +175,7 @@ export interface ComparisonResponse {
   truncated: boolean;
   vendors: ComparisonVendor[];
   not_submitted: NotSubmittedVendor[];
+  split_award_totals: SplitAwardTotal[];
   lines: ComparisonLine[];
 }
 

@@ -63,6 +63,23 @@ signal is flagged. See
 `databricks/FINDINGS.md`'s "App implementation" section for flag
 thresholds and the known-value spot check.
 
+**Technical disqualification + split-award totals built**, per a direct
+stakeholder request: a line technically rejected (`quotationline.QL2 =
+"TNA"`, a real Maximo field) is now excluded from *every* commercial
+computation — `is_lowest`, contract totals, the outlier baseline — while
+still being shown, clearly marked (strikethrough + a red marker), not
+hidden. Built without first live-verifying `QL2`'s behavior on a real
+detailed BOQ (it was only confirmed on a smaller, non-construction
+sample) — an explicit decision, made safe by a fail-open fetch: if the
+column isn't there or the query fails, disqualification just doesn't
+apply, rather than breaking the comparison view. A new "if split-awarded
+by line" table at the bottom of the BOQ Comparison page shows each
+vendor's total if every line went individually to whoever's cheapest
+*technically-accepted* bidder on that line — distinct from each vendor's
+own "Contract total" above it. See `databricks/FINDINGS.md`'s "App
+implementation" section for the exact scope decisions and what to check
+first against real data.
+
 **Round-over-round tracking built**, a second tab on the project detail
 page: a line chart + totals table of each vendor's contract total across
 negotiation revisions, plus anomaly flags (a price that rises between

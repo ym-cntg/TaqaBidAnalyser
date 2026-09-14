@@ -963,6 +963,98 @@ or the grant isn't applied), the read-only comparison view still returns
 normally with zero corrections applied, rather than breaking a working
 feature because of an unrelated write-path gap.
 
+### Technical disqualification (QL2 = "TNA") and split-award totals (2026-09-14)
+
+A real stakeholder ask, relayed via the user: technically-rejected BOQ
+line items must never factor into commercial evaluation, and in a
+split-award scenario it would help to see each vendor's total if awarded
+line-by-line. Both land in `backend/api/comparison.py`.
+
+**The technical-acceptance signal already exists in the real schema** —
+`quotationline`/`altquotationline` both carry `QL2`, already confirmed
+earlier in this file as a real technical-acceptance status field, with
+5 values measured on `altquotationline`: `QUOTED` (41,027), `TNA`
+(1,387), `NOQUOTE` (182), `Cancel` (51), `CNA` (21). Reading the
+acronyms in the standard tendering sense (**T**echnically **N**ot
+**A**ccepted / **C**ommercially **N**ot **A**ccepted), only `TNA` is
+treated as disqualifying here (`DISQUALIFYING_QL2_VALUES = {"TNA"}`) —
+an explicit product decision, not a guess: `Cancel`/`CNA`/`NOQUOTE`
+are left exactly as they already behaved.
+
+**Built without live-verifying QL2 on `quotationline` first — an
+explicit decision, not an oversight.** The value distribution above was
+only ever measured on `altquotationline` (a smaller, non-construction
+MRO sample); whether `QL2` is populated the same way on `quotationline`
+for a real detailed construction BOQ is still unverified. Given that,
+`_fetch_technical_status()` is deliberately fail-open, same pattern as
+`_fetch_corrections()`: if the column doesn't exist or the query fails
+for any other reason, technical disqualification is simply never
+applied — the comparison view keeps working exactly as it did before
+this feature existed, rather than a missing/renamed column taking down
+a working read path. **First thing to check once this runs against a
+real detailed BOQ**: does any vendor actually come back with
+`technically_disqualified_count > 0`? If every RFQ shows zero
+regardless of what's really in Maximo, `QL2` likely isn't populated the
+same way on `quotationline` as it is on `altquotationline`, and this
+needs a real `DESCRIBE`/value-distribution check.
+
+**What "excluded from commercial evaluation" means in practice**: a
+disqualified cell is real (the vendor did submit a price — it's shown,
+not hidden, with a distinct strikethrough + red marker) but is excluded
+from `is_lowest`, the vendor's `contract_total`, the peer-median outlier
+baseline, and every other flag (`zero_price`/`arithmetic_error`/`outlier`
+are all suppressed for it, same precedent as a manually corrected cell).
+`unquoted` and `technically_disqualified` are independent, non-
+overlapping reasons a cell can be out of play — a disqualified vendor
+clearly did submit something, so they're never also marked unquoted.
+
+**Split-award totals**: a new `split_award_totals` array in the
+`/comparison` response — for each vendor, the sum of every line where
+they're the cheapest *technically-accepted* bidder (i.e. `is_lowest`,
+computed after disqualification is applied), plus how many lines they'd
+win. This is the answer to "what would each vendor actually get paid if
+we split-awarded line by line" — deliberately distinct from
+`contract_total` (each vendor's own full bid). Computed over the *full*
+line set (`all_lines`), not just the returned/truncated page, same
+invariant as every other aggregate here. On the rare exact tie for
+cheapest between two vendors, both are credited for that line — there's
+no principled way to pick a single "winner" between identical prices,
+so this stays honest about the tie rather than guessing one.
+
+**Verified in the scratchpad**: a disqualified cheapest price correctly
+loses `is_lowest` to the next real bidder; an undisqualified line is
+completely unaffected; a cell that's both disqualified and zero-priced
+shows `technically_disqualified` with `zero_price` suppressed (not
+both); `contract_total` correctly excludes every disqualified line's
+cost regardless of whether that line would have been cheap or expensive;
+`technically_disqualified_count` is correct per vendor; split-award
+totals correctly reflect a line-by-line award to the cheapest accepted
+bidder; and — the most important case given the "build without
+verifying first" decision — a failing QL2 query fails open cleanly, with
+nobody wrongly disqualified and the rest of the comparison unaffected.
+Existing outlier-detection and round-scoped-comparison regression tests
+were re-run and still pass unchanged. Frontend build/typecheck passed; a
+mock-backend Playwright walkthrough confirmed the disqualified cell's
+strikethrough styling, the vendor summary's "disqualified" badge, the
+contract-total exclusion note, and the new split-award table at the
+bottom of the page all render as designed.
+
+**Known limitations, by design or first-pass, not oversights**:
+- Only `TNA` disqualifies — `Cancel`/`CNA`/`NOQUOTE` behave exactly as
+  before. Revisit if the real meaning of `CNA` (assumed "Commercially
+  Not Accepted" from convention, not confirmed with TAQA) turns out to
+  also warrant exclusion from commercial evaluation.
+- `negotiation_report.py`'s `_collect_boq_issues()` doesn't surface
+  `technically_disqualified` as a top-issue category yet — the
+  negotiation-prep export/report doesn't call this out the way the BOQ
+  Comparison page now does. Not requested; a natural follow-up if
+  disqualification turns out to matter for negotiation prep too.
+- No round-scoping consideration was needed: technical status doesn't
+  change between negotiation rounds (it's locked before commercial
+  negotiation even starts), so `_fetch_technical_status()` is fetched
+  once and applied identically regardless of which round is being
+  viewed.
+
 ### Browse-list scope: only RFQs with a real BOQ (`MIN_BOQ_LINE_ITEMS = 10`)
 
 Product decision: the RFQ Browse page only ever loads RFQs with

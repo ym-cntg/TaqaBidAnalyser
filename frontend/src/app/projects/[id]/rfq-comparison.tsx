@@ -1,6 +1,6 @@
 "use client";
 
-import { Check, Pencil, Sparkles, X } from "lucide-react";
+import { Ban, Check, Lock, Pencil, ShieldOff, Sparkles, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -10,6 +10,7 @@ import {
   createCorrection,
   generateBetaPricing,
   getComparison,
+  setDisqualification,
   type BetaLineEstimate,
   type ComparisonLinePrice,
   type ComparisonResponse,
@@ -60,6 +61,11 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
   const [saving, setSaving] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
+  const [disqualifying, setDisqualifying] = useState<EditTarget | null>(null);
+  const [disqualifyReason, setDisqualifyReason] = useState("");
+  const [disqualifySaving, setDisqualifySaving] = useState(false);
+  const [disqualifyError, setDisqualifyError] = useState<string | null>(null);
+
   const [betaState, setBetaState] = useState<BetaState>({ status: "idle" });
 
   const identity = getCachedIdentity();
@@ -89,6 +95,7 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
   function changeRound(newRound: string) {
     setRound(newRound);
     setEditing(null);
+    setDisqualifying(null);
     setBetaState({ status: "idle" });
     load(newRound);
   }
@@ -152,6 +159,42 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
       setEditError(err instanceof Error ? err.message : String(err));
     } finally {
       setSaving(false);
+    }
+  }
+
+  function startDisqualify(rfqlinenum: number, vendor: string) {
+    setDisqualifying({ rfqlinenum, vendor });
+    setDisqualifyReason("");
+    setDisqualifyError(null);
+  }
+
+  function cancelDisqualify() {
+    setDisqualifying(null);
+    setDisqualifyError(null);
+  }
+
+  async function confirmDisqualify(nextDisqualified: boolean) {
+    if (!disqualifying || !identity) return;
+    setDisqualifySaving(true);
+    setDisqualifyError(null);
+    try {
+      await setDisqualification({
+        rfqnum,
+        rfqlinenum: disqualifying.rfqlinenum,
+        vendor: disqualifying.vendor,
+        disqualified: nextDisqualified,
+        userId: identity.userId,
+        reason: disqualifyReason.trim() || undefined,
+      });
+      setDisqualifying(null);
+      // Same reasoning as saveEdit: a disqualification changes is_lowest,
+      // contract totals, and split-award totals for the whole line, not
+      // just this one cell -- refetch rather than patch locally.
+      await load(round);
+    } catch (err) {
+      setDisqualifyError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setDisqualifySaving(false);
     }
   }
 
@@ -348,6 +391,12 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
             Hover a price to correct it
           </span>
         )}
+        {identity && (
+          <span className="flex items-center gap-1">
+            <Ban className="w-3 h-3" />
+            Hover a price to disqualify it (app-only — never written back to Maximo)
+          </span>
+        )}
       </div>
 
       {data.truncated && (
@@ -474,6 +523,17 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
                         onStartEdit={() => startEdit(line.rfqlinenum, v.vendor, line.prices[v.vendor]?.unit_cost ?? null)}
                         onSave={saveEdit}
                         onCancel={cancelEdit}
+                        canDisqualify={!!identity}
+                        isDisqualifying={
+                          disqualifying?.rfqlinenum === line.rfqlinenum && disqualifying?.vendor === v.vendor
+                        }
+                        disqualifyReason={disqualifyReason}
+                        onDisqualifyReasonChange={setDisqualifyReason}
+                        disqualifyError={disqualifyError}
+                        disqualifySaving={disqualifySaving}
+                        onStartDisqualify={() => startDisqualify(line.rfqlinenum, v.vendor)}
+                        onConfirmDisqualify={confirmDisqualify}
+                        onCancelDisqualify={cancelDisqualify}
                       />
                     ))}
                     {betaState.status === "ok" && <BetaCell estimate={betaState.lines.get(line.rfqlinenum)} />}
@@ -543,6 +603,15 @@ function PriceCell({
   onStartEdit,
   onSave,
   onCancel,
+  canDisqualify,
+  isDisqualifying,
+  disqualifyReason,
+  onDisqualifyReasonChange,
+  disqualifyError,
+  disqualifySaving,
+  onStartDisqualify,
+  onConfirmDisqualify,
+  onCancelDisqualify,
 }: {
   p: ComparisonLinePrice | undefined;
   colorClass: string;
@@ -555,6 +624,15 @@ function PriceCell({
   onStartEdit: () => void;
   onSave: () => void;
   onCancel: () => void;
+  canDisqualify: boolean;
+  isDisqualifying: boolean;
+  disqualifyReason: string;
+  onDisqualifyReasonChange: (v: string) => void;
+  disqualifyError: string | null;
+  disqualifySaving: boolean;
+  onStartDisqualify: () => void;
+  onConfirmDisqualify: (disqualified: boolean) => void;
+  onCancelDisqualify: () => void;
 }) {
   if (isEditing) {
     return (
@@ -586,8 +664,49 @@ function PriceCell({
     );
   }
 
+  if (isDisqualifying) {
+    const undoing = p?.disqualification_source === "manual";
+    return (
+      <td className="px-2 py-1 text-right">
+        <div className="flex flex-col items-end gap-1">
+          {!undoing && (
+            <input
+              type="text"
+              placeholder="Reason (optional)"
+              autoFocus
+              value={disqualifyReason}
+              onChange={(e) => onDisqualifyReasonChange(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") onConfirmDisqualify(true);
+                if (e.key === "Escape") onCancelDisqualify();
+              }}
+              className="w-32 rounded border border-input bg-background px-1.5 py-0.5 text-right text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
+            />
+          )}
+          {undoing && <span className="text-[10px] text-muted-foreground">Re-qualify this line?</span>}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => onConfirmDisqualify(!undoing)}
+              disabled={disqualifySaving}
+              title={undoing ? "Confirm re-qualify" : "Confirm disqualify"}
+              className="text-green-600 hover:text-green-700"
+            >
+              <Check className="w-3.5 h-3.5" />
+            </button>
+            <button onClick={onCancelDisqualify} title="Cancel" className="text-muted-foreground hover:text-foreground">
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+          {disqualifyError && <span className="text-[10px] text-red-600 max-w-[140px] text-right">{disqualifyError}</span>}
+        </div>
+      </td>
+    );
+  }
+
   const empty = !p || p.unquoted;
   const disqualified = !empty && p!.technically_disqualified;
+  const maximoLocked = disqualified && p!.disqualification_source === "maximo";
+  const manuallyDisqualified = disqualified && p!.disqualification_source === "manual";
 
   return (
     <td
@@ -603,6 +722,34 @@ function PriceCell({
             className="opacity-0 group-hover/cell:opacity-100 transition-opacity text-muted-foreground hover:text-primary shrink-0"
           >
             <Pencil className="w-3 h-3" />
+          </button>
+        )}
+        {canDisqualify && !empty && maximoLocked && (
+          <span
+            className="opacity-0 group-hover/cell:opacity-100 transition-opacity text-muted-foreground shrink-0"
+            title="Technically disqualified in Maximo (QL2 = TNA) -- cannot be changed here"
+          >
+            <Lock className="w-3 h-3" />
+          </span>
+        )}
+        {canDisqualify && !empty && manuallyDisqualified && (
+          <button
+            onClick={onStartDisqualify}
+            title={`Disqualified by ${p!.disqualified_by_label ?? "someone"}${
+              p!.disqualification_reason ? ` — ${p!.disqualification_reason}` : ""
+            } — click to re-qualify`}
+            className="opacity-0 group-hover/cell:opacity-100 transition-opacity text-red-800 hover:text-red-900 shrink-0"
+          >
+            <ShieldOff className="w-3 h-3" />
+          </button>
+        )}
+        {canDisqualify && !empty && !disqualified && (
+          <button
+            onClick={onStartDisqualify}
+            title="Disqualify this line from commercial evaluation"
+            className="opacity-0 group-hover/cell:opacity-100 transition-opacity text-muted-foreground hover:text-red-800 shrink-0"
+          >
+            <Ban className="w-3 h-3" />
           </button>
         )}
         {disqualified && (

@@ -10,6 +10,6 @@ TABLE IF NOT EXISTS` statement lazily, on the write path that needs it, so
 schema changes to an *existing* table need a manual `ALTER TABLE` run once
 against the warehouse (not handled by this mechanism).
 
-Both tables here need `CREATE TABLE`/`INSERT`/`UPDATE` grants for the app's
+All tables here need `CREATE TABLE`/`INSERT`/`UPDATE` grants for the app's
 service principal, beyond the `USE CATALOG`/`USE SCHEMA`/`SELECT`-only
 access it has today -- see `databricks/FINDINGS.md` for status.

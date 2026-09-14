@@ -1055,6 +1055,70 @@ bottom of the page all render as designed.
   once and applied identically regardless of which round is being
   viewed.
 
+### Manual disqualification (`backend/api/disqualifications.py`, `bid_analyzer_line_disqualifications`)
+
+Immediate follow-up to QL2-driven disqualification above: the user asked
+whether a buyer/analyst can disqualify a line themselves in the tool,
+independent of Maximo. New app-owned overlay table, same shape and
+lifecycle as `bid_analyzer_price_corrections` — append-only, `POST
+/api/rfqs/{rfqnum}/disqualifications` inserts a new row, and the latest
+row per `(rfqnum, rfqlinenum, vendor)` wins. Never written back into
+`quotationline`.
+
+**Deliberately add-only relative to Maximo — enforced by an `OR`, not
+by special-case validation code.** `comparison.py` computes
+`technically_disqualified = ql2_disqualified or manual_disqualified`.
+That single line is the entire enforcement of "an analyst can flag a
+line QL2 never caught, and can undo their own manual entry, but can
+never re-qualify a real QL2='TNA' rejection back to qualified" — no
+extra logic was needed in `disqualifications.py` to block that case; a
+`disqualified=false` write against a QL2='TNA' line is accepted and
+stored, it just has zero effect on the merged result, because Maximo's
+side of the `OR` is still true. Verified directly in the scratchpad
+(the exact "trying to override" scenario).
+
+**Validation on write**: the target `(rfqnum, rfqlinenum, vendor)` must
+correspond to a real `quotationline` row (catches typos rather than
+creating an orphan entry for a line/vendor that was never even quoted)
+and `user_id` must be a real, already-identified user — same two checks
+`corrections.py` already does, reused verbatim in spirit.
+
+**Frontend**: a new icon appears on hover next to the existing
+correction pencil, unlike price corrections this is **not** gated to
+the original round (technical/manual disqualification status doesn't
+change between negotiation rounds, so there's no reason to restrict it)
+— only to being identified:
+- **Ban icon** (not yet disqualified) → click opens an inline reason
+  field, confirm calls the endpoint with `disqualified: true`.
+- **ShieldOff icon** (manually disqualified) → click opens a one-click
+  "re-qualify?" confirm, calls the endpoint with `disqualified: false`.
+- **Lock icon, non-interactive** (Maximo-disqualified, `QL2='TNA'`) —
+  deliberately offers no click action at all, rather than a button that
+  would silently do nothing if pressed (per the `OR` above). The
+  disqualification badge/tooltip always shows which of the two sources
+  is responsible (`disqualification_source: "maximo" | "manual" |
+  null`), plus the reason and who disqualified it for a manual entry.
+
+**Verified in the scratchpad**: a manual disqualification excludes the
+cell from `is_lowest` and shows the right source/reason/attribution; an
+analyst can undo their own entry and the line returns fully to normal
+(including `is_lowest` flipping back); a manual `disqualified=false`
+against a real `QL2='TNA'` line has no effect, confirming Maximo's
+status can't be overridden; an unknown `user_id` → clean 404; an
+unknown line/vendor combination → clean 400. All prior
+disqualification/outlier/round-scoping tests re-run clean. Frontend
+build/typecheck passed; a mock-backend Playwright walkthrough exercised
+the full live loop — hover → disqualify with a reason → confirm →
+contract total updates and the badge appears → hover → undo → confirm
+→ everything reverts.
+
+**Known limitations, first-pass**: no bulk disqualify (one line/vendor
+per request); no listing endpoint for "everything disqualified on this
+RFQ and why" beyond what's visible per-cell in the comparison table
+itself; needs the same `CREATE TABLE`/`INSERT` grant as
+`bid_analyzer_price_corrections`, still pending per the rest of this
+file.
+
 ### Browse-list scope: only RFQs with a real BOQ (`MIN_BOQ_LINE_ITEMS = 10`)
 
 Product decision: the RFQ Browse page only ever loads RFQs with

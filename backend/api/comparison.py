@@ -39,6 +39,16 @@ contract_total, the outlier baseline, and every other flag -- but still
 shown (not hidden like a corrected-away value), clearly marked, so the
 analyst can see why a real submitted price isn't in commercial play.
 
+Manual disqualification (backend/api/disqualifications.py,
+bid_analyzer_line_disqualifications) lets an analyst disqualify a line
+the same way, for a reason QL2 doesn't capture -- also never written
+back into quotationline, applied as a display-time overlay here exactly
+like corrections. It's deliberately **add-only relative to Maximo**: the
+two sources are merged with `or` (technically_disqualified = QL2-driven
+OR manual), so an analyst can undo their own manual entry but can never
+flip a real QL2='TNA' rejection back to qualified -- there's no special-
+case code enforcing that rule, it falls straight out of the OR.
+
 Round-scoped view: DISCOUNTHISTORYLINE only carries a post-discount
 LINECOST (LINECOSTWDIS), no per-round unit rate, so a round other than
 "original" derives unit_cost = line_cost / qty (qty doesn't change
@@ -105,6 +115,9 @@ class LinePrice:
     outlier: bool
     zero_price: bool
     technically_disqualified: bool
+    disqualification_source: str | None
+    disqualification_reason: str | None
+    disqualified_by_label: str | None
     corrected: bool
     corrected_by_label: str | None
     corrected_note: str | None
@@ -246,6 +259,36 @@ def _fetch_technical_status(rfqnum: str) -> dict[tuple[float, str], str | None]:
         return {}
 
 
+def _fetch_manual_disqualifications(rfqnum: str) -> dict[tuple[float, str], object]:
+    """Latest manual disqualification entry per (rfqlinenum, vendor), or
+    {} if the table doesn't exist yet (nobody has disqualified anything,
+    or the write grant isn't applied). Deliberately fail-open, same
+    reasoning as _fetch_corrections -- a read-only view must keep
+    working regardless of an unrelated write-path gap. The latest row's
+    `disqualified` boolean is the current state; a later disqualified=False
+    row is how an analyst undoes their own earlier entry (see
+    backend/api/disqualifications.py)."""
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT rfqlinenum, vendor, disqualified, reason, disqualified_by, disqualified_at
+                    FROM {CATALOG}.{SCHEMA}.bid_analyzer_line_disqualifications
+                    WHERE rfqnum = '{escape_sql_literal(rfqnum)}'
+                    ORDER BY disqualified_at ASC
+                    """
+                )
+                rows = cursor.fetchall()
+    except Exception:
+        return {}
+
+    latest: dict[tuple[float, str], object] = {}
+    for row in rows:
+        latest[(row.rfqlinenum, row.vendor)] = row  # ASC order -> last write wins
+    return latest
+
+
 def _fetch_user_names(user_ids: set[str]) -> dict[str, str]:
     if not user_ids:
         return {}
@@ -291,11 +334,16 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
     snapshots = round_data["snapshots"]
 
     corrections = _fetch_corrections(rfqnum) if is_original else {}
-    corrector_names = _fetch_user_names({c.corrected_by for c in corrections.values()})
-    # Technical status doesn't change round to round (it's locked before
-    # commercial negotiation even starts), so this is fetched once and
-    # applied regardless of which round is being viewed.
+    # Technical/manual disqualification status doesn't change round to
+    # round (it's locked before commercial negotiation even starts), so
+    # both are fetched once and applied regardless of which round is
+    # being viewed.
     technical_status = _fetch_technical_status(rfqnum)
+    manual_disqualifications = _fetch_manual_disqualifications(rfqnum)
+    user_names = _fetch_user_names(
+        {c.corrected_by for c in corrections.values()}
+        | {d.disqualified_by for d in manual_disqualifications.values()}
+    )
 
     lines_by_num: dict[float, list] = {}
     for row in rows:
@@ -343,17 +391,40 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
             if correction is not None:
                 unit_cost = float(correction.unit_cost)
                 line_cost = unit_cost * canonical_qty if canonical_qty is not None else None
-                corrected_by_label = corrector_names.get(correction.corrected_by, correction.corrected_by)
+                corrected_by_label = user_names.get(correction.corrected_by, correction.corrected_by)
                 corrected_note = correction.note
                 corrected_at = _iso(correction.corrected_at)
 
-            technically_disqualified = technical_status.get((linenum, vendor)) in DISQUALIFYING_QL2_VALUES
+            # QL2-driven disqualification is Maximo's system-of-record
+            # status; the manual overlay can only ADD to it or undo an
+            # analyst's own earlier entry, never cancel a real QL2='TNA'
+            # -- the `or` below is the entire enforcement of that rule.
+            ql2_disqualified = technical_status.get((linenum, vendor)) in DISQUALIFYING_QL2_VALUES
+            manual_entry = manual_disqualifications.get((linenum, vendor))
+            manual_disqualified = manual_entry is not None and manual_entry.disqualified
+            technically_disqualified = ql2_disqualified or manual_disqualified
+
+            if ql2_disqualified:
+                disqualification_source = "maximo"
+                disqualification_reason = None
+                disqualified_by_label = None
+            elif manual_disqualified:
+                disqualification_source = "manual"
+                disqualification_reason = manual_entry.reason
+                disqualified_by_label = user_names.get(manual_entry.disqualified_by, manual_entry.disqualified_by)
+            else:
+                disqualification_source = None
+                disqualification_reason = None
+                disqualified_by_label = None
 
             resolved[vendor] = dict(
                 unit_cost=unit_cost,
                 line_cost=line_cost,
                 qty=qty,
                 technically_disqualified=technically_disqualified,
+                disqualification_source=disqualification_source,
+                disqualification_reason=disqualification_reason,
+                disqualified_by_label=disqualified_by_label,
                 corrected=corrected,
                 corrected_by_label=corrected_by_label,
                 corrected_note=corrected_note,
@@ -540,6 +611,9 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
                 outlier=outlier,
                 zero_price=zero_price,
                 technically_disqualified=technically_disqualified,
+                disqualification_source=v["disqualification_source"],
+                disqualification_reason=v["disqualification_reason"],
+                disqualified_by_label=v["disqualified_by_label"],
                 corrected=corrected,
                 corrected_by_label=v["corrected_by_label"],
                 corrected_note=v["corrected_note"],

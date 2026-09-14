@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from backend.api.beta_pricing import router as beta_pricing_router
 from backend.api.comparison import router as comparison_router
 from backend.api.corrections import router as corrections_router
+from backend.api.disqualifications import router as disqualifications_router
 from backend.api.negotiation_narrative import router as negotiation_narrative_router
 from backend.api.negotiation_report import router as negotiation_report_router
 from backend.api.projects import router as projects_router
@@ -38,6 +39,7 @@ app.include_router(projects_router, prefix="/api")
 app.include_router(comparison_router, prefix="/api")
 app.include_router(beta_pricing_router, prefix="/api")
 app.include_router(corrections_router, prefix="/api")
+app.include_router(disqualifications_router, prefix="/api")
 app.include_router(rounds_router, prefix="/api")
 app.include_router(negotiation_report_router, prefix="/api")
 app.include_router(negotiation_narrative_router, prefix="/api")

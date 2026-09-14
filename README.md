@@ -80,6 +80,20 @@ own "Contract total" above it. See `databricks/FINDINGS.md`'s "App
 implementation" section for the exact scope decisions and what to check
 first against real data.
 
+**Manual disqualification built** as a direct follow-up: a buyer/analyst
+can now disqualify a line themselves, in-app only — never written back
+to Maximo. New icon on hover next to the correction pencil (a Ban icon
+to disqualify with an optional reason, a ShieldOff icon to undo their
+own entry) available regardless of round, since disqualification status
+doesn't change round to round. Deliberately **add-only relative to
+Maximo**: an analyst can flag something QL2 never caught, or undo their
+own manual entry, but can never re-qualify a real `QL2='TNA'` rejection
+— enforced by merging the two sources with a plain `or`, not by
+special-case validation, so a Maximo-locked cell shows a non-interactive
+lock icon instead of a button that would silently do nothing. See
+`databricks/FINDINGS.md`'s "App implementation" section for the write
+validation and the full verification.
+
 **Round-over-round tracking built**, a second tab on the project detail
 page: a line chart + totals table of each vendor's contract total across
 negotiation revisions, plus anomaly flags (a price that rises between
@@ -187,6 +201,10 @@ this was built.
   selector and `rounds.py`'s trend chart are built on.
 - `backend/api/corrections.py` — `POST /api/rfqs/{rfqnum}/corrections`
   against `bid_analyzer_price_corrections`.
+- `backend/api/disqualifications.py` — `POST
+  /api/rfqs/{rfqnum}/disqualifications` against
+  `bid_analyzer_line_disqualifications`, the app-only manual
+  disqualification overlay.
 - `backend/api/rounds.py` — `GET /api/rfqs/{rfqnum}/rounds`, the
   round-over-round trend + movement flags.
 - `backend/api/negotiation_report.py` — `GET

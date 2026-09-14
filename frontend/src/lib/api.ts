@@ -130,6 +130,9 @@ export interface ComparisonLinePrice {
   outlier: boolean;
   zero_price: boolean;
   technically_disqualified: boolean;
+  disqualification_source: "maximo" | "manual" | null;
+  disqualification_reason: string | null;
+  disqualified_by_label: string | null;
   corrected: boolean;
   corrected_by_label: string | null;
   corrected_note: string | null;
@@ -217,6 +220,43 @@ export async function createCorrection(params: CreateCorrectionParams): Promise<
     }),
   });
   return handleJson<CorrectionSummary>(res);
+}
+
+export interface SetDisqualificationParams {
+  rfqnum: string;
+  rfqlinenum: number;
+  vendor: string;
+  disqualified: boolean;
+  userId: string;
+  reason?: string;
+}
+
+export interface DisqualificationSummary {
+  rfqlinenum: number;
+  vendor: string;
+  disqualified: boolean;
+  reason: string | null;
+  disqualified_by_label: string | null;
+  disqualified_at: string;
+}
+
+// Add-only relative to Maximo: this can flag a line QL2 never caught, or
+// undo the caller's own earlier entry, but can never override a real
+// QL2='TNA' rejection -- comparison.py merges the two with an OR, so
+// disqualified=false here has no effect on a Maximo-sourced flag.
+export async function setDisqualification(params: SetDisqualificationParams): Promise<DisqualificationSummary> {
+  const res = await fetch(`/api/rfqs/${encodeURIComponent(params.rfqnum)}/disqualifications`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      rfqlinenum: params.rfqlinenum,
+      vendor: params.vendor,
+      disqualified: params.disqualified,
+      user_id: params.userId,
+      reason: params.reason ?? null,
+    }),
+  });
+  return handleJson<DisqualificationSummary>(res);
 }
 
 export interface RoundPoint {

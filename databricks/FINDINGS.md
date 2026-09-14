@@ -1119,6 +1119,92 @@ itself; needs the same `CREATE TABLE`/`INSERT` grant as
 `bid_analyzer_price_corrections`, still pending per the rest of this
 file.
 
+### Partial bids (`backend/api/partial_bids.py`, `bid_analyzer_partial_bids`)
+
+Second half of the same compound request that produced manual
+disqualification above: the user also asked for the app to handle a
+vendor who was only ever expected to bid part of the BOQ (e.g. one lot of
+a multi-lot tender), so their partial scope doesn't get penalized or
+misread as a cheaper full bid. Unlike the two disqualification overlays,
+this is a **whole-vendor** flag, not a per-line one — new app-owned
+overlay table keyed on `(rfqnum, vendor)` with no `rfqlinenum`, same
+append-only lifecycle as the others (`POST /api/rfqs/{rfqnum}/partial-bids`
+inserts a row, latest row per `(rfqnum, vendor)` wins). Never written back
+into `rfqvendor`/`quotationline`.
+
+**What "marked partial" changes**, per an explicit product decision (the
+user was asked which of several plausible interpretations of "given more
+importance" they meant, and picked all three):
+1. **`unquoted_count` is suppressed to 0** on the vendor summary — an
+   unquoted line is expected for a partial bidder, not a gap worth
+   flagging the way it is for a full-scope bidder. The real count is
+   still derivable from the new `quoted_line_count` field
+   (`total_line_count - raw unquoted count`), just not surfaced as a red
+   flag.
+2. **Contract total is annotated with scope**, via `quoted_line_count` —
+   the frontend renders "Partial bid — N of M lines" under a partial
+   bidder's total so it's never mistaken for a directly comparable
+   full-scope figure. The `contract_total` number itself is untouched;
+   only its presentation changes.
+3. **Excluded from the vendor-summary "Lowest" badge** — this is purely a
+   frontend computation (`lowestTotal` in `rfq-comparison.tsx` is now
+   `Math.min` over non-partial vendors only). A partial bidder can still
+   win individual lines and appear in the split-award table on whatever
+   they did bid — only the aggregate "cheapest overall" badge is
+   affected, since comparing a partial-scope total against a full-scope
+   one is apples-to-oranges.
+
+**Mechanism to mark a bid partial**: a per-vendor checkbox in the
+contract-totals table, visible to any identified user, gated the same
+way as disqualification (not round-restricted — bid scope doesn't change
+between negotiation rounds, so `_fetch_partial_bids()` is fetched
+unconditionally like the other two overlays).
+
+**Validation on write**: `user_id` must be a real, already-identified
+user, and `vendor` must actually be on this RFQ's `rfqvendor` roster
+(catches a typo'd vendor code rather than creating an orphan flag) —
+same two-check shape as `corrections.py`/`disqualifications.py`, just
+checking `rfqvendor` instead of `quotationline` since this isn't a
+per-line concept.
+
+**Verified in the scratchpad**: baseline (an un-flagged vendor's missing
+line reads as an ordinary unquoted flag); marking partial suppresses
+`unquoted_count` to 0 and exposes the right `quoted_line_count`/
+`partial_bid_note`, without affecting any other vendor; `contract_total`
+itself is unchanged by the flag (relabeling is frontend-only); an
+analyst can undo their own flag and the real unquoted count returns;
+unknown `user_id` → clean 404; a vendor not on the roster → clean 400.
+All prior disqualification/outlier/round-scoping regression tests re-run
+clean. Frontend build/typecheck passed; a mock-backend Playwright
+walkthrough exercised the full live loop on a deliberately adversarial
+scenario (a 2-of-3-line partial bidder whose partial total was, before
+the fix, numerically the cheapest and wrongly winning "Lowest") —
+checking the box correctly moved the "Lowest" badge to a genuine
+full-scope bidder, replaced the "1 unquoted" flag with a "Partial bid"
+badge, and annotated the total with "2 of 3 lines".
+
+**Incidental fix found during that walkthrough**: two existing inline
+captions in `rfq-comparison.tsx` (the disqualification-exclusion note,
+and now this feature's own explainer) lost the space between a `</span>`
+and the plain text immediately following it on the same source line —
+this project's JSX/SWC transform strips that adjacency even without an
+intervening newline, not just the newline-adjacent whitespace the
+existing `{" "}` before a tag already guarded against. Fixed by adding
+the same explicit `{" "}` immediately after the closing tag wherever
+plain text follows it on the same line, in both the pre-existing
+disqualification caption and the new partial-bid one.
+
+**Known limitations, first-pass**: no bulk-flag (one vendor per
+request); no note/reason surfaced in the UI beyond a tooltip-style
+caption (the `partial_bid_note` field exists end-to-end but isn't yet
+rendered per-vendor); needs the same `CREATE TABLE`/`INSERT` grant as
+the other two overlay tables, still pending per the rest of this file;
+`negotiation_report.py`/the AI narrative don't yet know about partial
+bids, so a partial bidder's contract total could still be described
+there without the same "not directly comparable" caveat the comparison
+page now shows — worth revisiting if that report becomes the primary
+artifact analysts share externally.
+
 ### Browse-list scope: only RFQs with a real BOQ (`MIN_BOQ_LINE_ITEMS = 10`)
 
 Product decision: the RFQ Browse page only ever loads RFQs with

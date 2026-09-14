@@ -156,6 +156,9 @@ export interface ComparisonVendor {
   outlier_count: number;
   zero_price_count: number;
   technically_disqualified_count: number;
+  is_partial_bid: boolean;
+  quoted_line_count: number;
+  partial_bid_note: string | null;
 }
 
 export interface NotSubmittedVendor {
@@ -257,6 +260,39 @@ export async function setDisqualification(params: SetDisqualificationParams): Pr
     }),
   });
   return handleJson<DisqualificationSummary>(res);
+}
+
+export interface SetPartialBidParams {
+  rfqnum: string;
+  vendor: string;
+  isPartial: boolean;
+  userId: string;
+  note?: string;
+}
+
+export interface PartialBidSummary {
+  vendor: string;
+  is_partial: boolean;
+  note: string | null;
+  marked_by_label: string | null;
+  marked_at: string;
+}
+
+// Whole-vendor flag, not per-line -- marks a deliberate partial-scope
+// submission (see comparison.py's module docstring). App-only, never
+// written back to Maximo.
+export async function setPartialBid(params: SetPartialBidParams): Promise<PartialBidSummary> {
+  const res = await fetch(`/api/rfqs/${encodeURIComponent(params.rfqnum)}/partial-bids`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      vendor: params.vendor,
+      is_partial: params.isPartial,
+      user_id: params.userId,
+      note: params.note ?? null,
+    }),
+  });
+  return handleJson<PartialBidSummary>(res);
 }
 
 export interface RoundPoint {

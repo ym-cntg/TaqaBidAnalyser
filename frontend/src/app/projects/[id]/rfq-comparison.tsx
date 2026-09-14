@@ -11,6 +11,7 @@ import {
   generateBetaPricing,
   getComparison,
   setDisqualification,
+  setPartialBid,
   type BetaLineEstimate,
   type ComparisonLinePrice,
   type ComparisonResponse,
@@ -67,6 +68,9 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
   const [disqualifyError, setDisqualifyError] = useState<string | null>(null);
 
   const [betaState, setBetaState] = useState<BetaState>({ status: "idle" });
+
+  const [partialSaving, setPartialSaving] = useState<string | null>(null);
+  const [partialError, setPartialError] = useState<string | null>(null);
 
   const identity = getCachedIdentity();
   const isOriginalRound = !round || round === "original";
@@ -198,6 +202,23 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
     }
   }
 
+  async function togglePartialBid(vendor: string, nextIsPartial: boolean) {
+    if (!identity) return;
+    setPartialSaving(vendor);
+    setPartialError(null);
+    try {
+      await setPartialBid({ rfqnum, vendor, isPartial: nextIsPartial, userId: identity.userId });
+      // Toggling this changes unquoted_count, the "Lowest" eligibility,
+      // and quoted_line_count for this vendor -- refetch rather than
+      // patch locally, same reasoning as saveEdit/confirmDisqualify.
+      await load(round);
+    } catch (err) {
+      setPartialError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setPartialSaving(null);
+    }
+  }
+
   if (status === "loading") {
     return <div className="text-center py-12 text-muted-foreground animate-pulse">Loading comparison…</div>;
   }
@@ -216,8 +237,11 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
     );
   }
 
-  const contractTotals = data.vendors.map((v) => v.contract_total);
-  const lowestTotal = Math.min(...contractTotals);
+  // A partial-scope total isn't comparable to a full-scope one, so a
+  // partial bidder can never win the aggregate "Lowest" badge -- they can
+  // still win individual lines/split-award on whatever they did bid.
+  const fullScopeTotals = data.vendors.filter((v) => !v.is_partial_bid).map((v) => v.contract_total);
+  const lowestTotal = fullScopeTotals.length > 0 ? Math.min(...fullScopeTotals) : null;
 
   const term = search.trim().toLowerCase();
   const isSearching = term.length > 0;
@@ -273,7 +297,7 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
           </thead>
           <tbody>
             {data.vendors.map((v) => {
-              const isLowest = v.contract_total === lowestTotal;
+              const isLowest = !v.is_partial_bid && lowestTotal !== null && v.contract_total === lowestTotal;
               return (
                 <tr
                   key={v.vendor}
@@ -284,11 +308,36 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
                   <td className="px-4 py-2">
                     <div className="font-medium">{vendorLabel(v.vendor, v.name)}</div>
                     <div className="font-mono text-xs text-muted-foreground">{v.vendor}</div>
+                    {identity && (
+                      <label className="mt-1 flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={v.is_partial_bid}
+                          disabled={partialSaving === v.vendor}
+                          onChange={() => togglePartialBid(v.vendor, !v.is_partial_bid)}
+                          className="h-3 w-3"
+                        />
+                        Partial bid
+                      </label>
+                    )}
                   </td>
-                  <td className="px-4 py-2 text-right font-mono font-semibold">{formatAED(v.contract_total)}</td>
+                  <td className="px-4 py-2 text-right">
+                    <div className="font-mono font-semibold">{formatAED(v.contract_total)}</div>
+                    {v.is_partial_bid && (
+                      <div className="text-[10px] text-muted-foreground">
+                        Partial bid — {v.quoted_line_count.toLocaleString()} of{" "}
+                        {data.total_line_count.toLocaleString()} lines
+                      </div>
+                    )}
+                  </td>
                   <td className="px-4 py-2">
                     <div className="flex flex-wrap gap-1">
                       {isLowest && <Badge className="bg-emerald-600 text-white text-[10px]">Lowest</Badge>}
+                      {v.is_partial_bid && (
+                        <Badge variant="outline" className="border-blue-500 text-blue-600">
+                          Partial bid
+                        </Badge>
+                      )}
                       {v.unquoted_count > 0 && <Badge variant="outline">{v.unquoted_count} unquoted</Badge>}
                       {v.zero_price_count > 0 && (
                         <Badge variant="outline">
@@ -319,10 +368,25 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
         </table>
       </div>
 
+      {partialError && (
+        <p className="text-xs text-red-600">Could not update partial-bid flag: {partialError}</p>
+      )}
+
+      {data.vendors.some((v) => v.is_partial_bid) && (
+        <p className="text-xs text-muted-foreground">
+          A vendor marked <span className="text-blue-600 font-medium">Partial bid</span>{" "}
+          was expected to price only part of the BOQ — their unquoted lines aren&apos;t flagged, and their
+          contract total is excluded from the overall{" "}
+          <span className="text-emerald-600 font-medium">Lowest</span>{" "}
+          badge since it isn&apos;t a full-scope figure. They can still win individual lines or a split award.
+        </p>
+      )}
+
       {data.vendors.some((v) => v.technically_disqualified_count > 0) && (
         <p className="text-xs text-muted-foreground">
           Contract totals above exclude any technically disqualified line — see the{" "}
-          <span className="text-red-800 font-medium">disqualified</span> marker in the table below.
+          <span className="text-red-800 font-medium">disqualified</span>{" "}
+          marker in the table below.
         </p>
       )}
 
@@ -395,6 +459,12 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
           <span className="flex items-center gap-1">
             <Ban className="w-3 h-3" />
             Hover a price to disqualify it (app-only — never written back to Maximo)
+          </span>
+        )}
+        {identity && (
+          <span className="flex items-center gap-1">
+            <input type="checkbox" checked readOnly className="h-3 w-3" />
+            Check &quot;Partial bid&quot; on a vendor who was only expected to price part of the BOQ
           </span>
         )}
       </div>

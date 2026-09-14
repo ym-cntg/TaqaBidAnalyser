@@ -49,6 +49,24 @@ OR manual), so an analyst can undo their own manual entry but can never
 flip a real QL2='TNA' rejection back to qualified -- there's no special-
 case code enforcing that rule, it falls straight out of the OR.
 
+Partial bids (backend/api/partial_bids.py, bid_analyzer_partial_bids): an
+analyst can flag a vendor's entire bid on this RFQ as a deliberate
+partial-scope submission (e.g. they only bid one lot of a multi-lot
+tender) -- a whole-vendor concept, unlike disqualification, so it's keyed
+on (rfqnum, vendor) with no rfqlinenum. Never written back into Maximo,
+applied as a display-time overlay exactly like the other overlays, and
+fetched unconditionally regardless of round (a vendor's bid scope doesn't
+change round to round). Marking a vendor partial changes three things
+about how they're compared, per an explicit product decision: their
+unquoted_count is suppressed to 0 (an unquoted line is expected for a
+partial bidder, not a red flag), quoted_line_count is exposed so the
+frontend can show how much of the BOQ their contract_total actually
+covers, and is_partial_bid lets the frontend exclude them from the
+vendor-summary "Lowest total" badge (comparing a partial-scope total
+against a full-scope one is apples-to-oranges) -- they can still win
+individual lines/split-award on whatever they did bid, since that part of
+the math is unaffected.
+
 Round-scoped view: DISCOUNTHISTORYLINE only carries a post-discount
 LINECOST (LINECOSTWDIS), no per-round unit rate, so a round other than
 "original" derives unit_cost = line_cost / qty (qty doesn't change
@@ -143,6 +161,9 @@ class VendorSummary:
     outlier_count: int
     zero_price_count: int
     technically_disqualified_count: int
+    is_partial_bid: bool
+    quoted_line_count: int
+    partial_bid_note: str | None
 
 
 @dataclass
@@ -289,6 +310,33 @@ def _fetch_manual_disqualifications(rfqnum: str) -> dict[tuple[float, str], obje
     return latest
 
 
+def _fetch_partial_bids(rfqnum: str) -> dict[str, object]:
+    """Latest partial-bid flag per vendor, or {} if the table doesn't
+    exist yet (nobody has flagged anything, or the write grant isn't
+    applied). Deliberately fail-open, same reasoning as
+    _fetch_manual_disqualifications. Whole-vendor, not per-line -- keyed
+    on vendor alone, unlike the other two overlays."""
+    try:
+        with get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    f"""
+                    SELECT vendor, is_partial, note, marked_by, marked_at
+                    FROM {CATALOG}.{SCHEMA}.bid_analyzer_partial_bids
+                    WHERE rfqnum = '{escape_sql_literal(rfqnum)}'
+                    ORDER BY marked_at ASC
+                    """
+                )
+                rows = cursor.fetchall()
+    except Exception:
+        return {}
+
+    latest: dict[str, object] = {}
+    for row in rows:
+        latest[row.vendor] = row  # ASC order -> last write wins
+    return latest
+
+
 def _fetch_user_names(user_ids: set[str]) -> dict[str, str]:
     if not user_ids:
         return {}
@@ -340,9 +388,15 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
     # being viewed.
     technical_status = _fetch_technical_status(rfqnum)
     manual_disqualifications = _fetch_manual_disqualifications(rfqnum)
+    # Bid scope (partial vs. full) is a property of the vendor's
+    # submission, not a given negotiation round, so this is fetched
+    # unconditionally too -- same reasoning as the two disqualification
+    # overlays above.
+    partial_bids = _fetch_partial_bids(rfqnum)
     user_names = _fetch_user_names(
         {c.corrected_by for c in corrections.values()}
         | {d.disqualified_by for d in manual_disqualifications.values()}
+        | {p.marked_by for p in partial_bids.values()}
     )
 
     lines_by_num: dict[float, list] = {}
@@ -650,19 +704,30 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
                 split_award[vendor]["total"] += price.line_cost
                 split_award[vendor]["line_count"] += 1
 
-    vendors = [
-        VendorSummary(
-            vendor=v,
-            name=vendor_names.get(v),
-            contract_total=vendor_totals[v],
-            unquoted_count=vendor_unquoted[v],
-            arithmetic_error_count=vendor_errors[v],
-            outlier_count=vendor_outliers[v],
-            zero_price_count=vendor_zero_price[v],
-            technically_disqualified_count=vendor_disqualified[v],
+    vendors = []
+    for v in sorted(submitting_vendors):
+        partial_entry = partial_bids.get(v)
+        is_partial_bid = partial_entry is not None and partial_entry.is_partial
+        vendors.append(
+            VendorSummary(
+                vendor=v,
+                name=vendor_names.get(v),
+                contract_total=vendor_totals[v],
+                # A partial bidder was never expected to price the whole
+                # BOQ, so an unquoted line for them isn't a gap worth
+                # flagging the way it is for a full-scope bidder -- see
+                # the module docstring's partial-bids section.
+                unquoted_count=0 if is_partial_bid else vendor_unquoted[v],
+                arithmetic_error_count=vendor_errors[v],
+                outlier_count=vendor_outliers[v],
+                zero_price_count=vendor_zero_price[v],
+                technically_disqualified_count=vendor_disqualified[v],
+                is_partial_bid=is_partial_bid,
+                quoted_line_count=total_line_count - vendor_unquoted[v],
+                partial_bid_note=partial_entry.note if is_partial_bid else None,
+            )
         )
-        for v in sorted(submitting_vendors)
-    ]
+
     not_submitted = [
         NotSubmittedVendor(vendor=v, name=name)
         for v, name in sorted(vendor_names.items())

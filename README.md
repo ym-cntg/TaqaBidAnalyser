@@ -94,6 +94,22 @@ lock icon instead of a button that would silently do nothing. See
 `databricks/FINDINGS.md`'s "App implementation" section for the write
 validation and the full verification.
 
+**Partial bids built**, second half of the same request: a vendor who was
+only ever expected to price part of the BOQ (e.g. one lot of a multi-lot
+tender) can now be flagged as such via a per-vendor checkbox, app-only.
+Unlike disqualification this is a whole-vendor flag, not per-line. Marking
+a vendor partial does three things, per an explicit choice among several
+options the user was asked to pick from: their unquoted lines stop
+counting as a flag, their contract total is annotated with how much of
+the BOQ it actually covers ("Partial bid — N of M lines"), and they're
+excluded from the vendor-summary "Lowest" badge (a partial-scope total
+isn't comparable to a full-scope one) — they can still win individual
+lines or a split award on whatever they did bid. See
+`databricks/FINDINGS.md`'s "App implementation" section for the write
+validation and full verification, including an adversarial scenario that
+demonstrates exactly the bug this feature fixes (a 2-of-3-line partial
+bidder's total wrongly winning "Lowest" before the flag is set).
+
 **Round-over-round tracking built**, a second tab on the project detail
 page: a line chart + totals table of each vendor's contract total across
 negotiation revisions, plus anomaly flags (a price that rises between
@@ -205,6 +221,9 @@ this was built.
   /api/rfqs/{rfqnum}/disqualifications` against
   `bid_analyzer_line_disqualifications`, the app-only manual
   disqualification overlay.
+- `backend/api/partial_bids.py` — `POST /api/rfqs/{rfqnum}/partial-bids`
+  against `bid_analyzer_partial_bids`, the app-only whole-vendor
+  partial-scope flag.
 - `backend/api/rounds.py` — `GET /api/rfqs/{rfqnum}/rounds`, the
   round-over-round trend + movement flags.
 - `backend/api/negotiation_report.py` — `GET

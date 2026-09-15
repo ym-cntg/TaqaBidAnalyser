@@ -1632,3 +1632,133 @@ overlapping the real vendor columns' cheapest/priciest coloring).
   materially different risk category (an invented price figure, not a
   description of real data), that review is a real open item before
   this ships beyond internal testing, not just a formality.
+
+## Proposed: `quotationline_latest` incremental-load watermark (draft, 2026-09-15)
+
+Follow-up to the watermark/timestamp gap flagged in the "tables we use
+from Maximo" discussion: `DISCOUNTHISTORY`/`DISCOUNTHISTORYLINE` have a
+real `ROWSTAMP` audit column, but `rfq`/`rfqvendor` only have partial
+signals (`ENTERDATE`, `BIDSTATUSDATE`) and `quotationline` (the biggest
+table, 1.66M rows) has **no change-timestamp at all**, confirmed for
+real: 1,146 of 2,480 lines on one BOQ picked up a discounted
+`LINECOSTWDIS` with zero timestamp trail of when. This section is a
+draft answer to "can we build a composite `quotationline_latest` table,
+joined to `rfq`/`rfqvendor`, ordered by `BIDSTATUSDATE`, for incremental
+loads?", **not yet built or run against the warehouse**, written up for
+the follow-up discussion on the `rfq`/`rfqvendor` combination logic.
+
+**Short answer: the join is the right idea, but `BIDSTATUSDATE` alone
+isn't enough to trust as the ordering/filter key.** `BIDSTATUSDATE`
+tracks the vendor's *submission lifecycle* (`SUBMITTED` /
+`COLLECTED` / `REGRETTED` / ...), it has no guaranteed relationship to
+a *post-bid discount round* being applied, which is exactly the
+mechanism that rewrote `LINECOSTWDIS` in the confirmed real case above
+without leaving a timestamp on `quotationline` itself. Ordering purely
+by `BIDSTATUSDATE` would very plausibly miss a discount-round update the
+same way a plain `ENTERDATE` cut already does.
+
+The fix: `rfqvendor` also carries round-specific timestamps
+(`DISCOUNT_SUBMISSION_DATE`, `DISCOUNT_APPLY_DATE`) that are much more
+directly tied to a price change than `BIDSTATUSDATE` is, and
+`DISCOUNTHISTORY.ROWSTAMP` (confirmed real, see the data-model notes
+above) is the one genuinely trustworthy audit column in this whole
+picture. Combining all of them into one `GREATEST(...)` per
+`(RFQNUM, VENDOR)` gives a much stronger "has anything about this
+vendor's bid moved" signal than any single column alone:
+
+```sql
+-- DRAFT -- not yet run against the warehouse. Databricks SQL's
+-- greatest() (Spark SQL) skips NULLs and only returns NULL if every
+-- argument is NULL, so no COALESCE-to-epoch is needed here -- most
+-- rfqvendor rows will have null DISCOUNT_* columns (no discount round
+-- ever happened for them) and that's fine.
+CREATE OR REPLACE VIEW ingestion_framework_test.bid_data_exploration.quotationline_latest AS
+WITH discount_activity AS (
+    -- Per (RFQNUM, VENDOR): the most recent real audit timestamp from
+    -- the one table in this schema confirmed to actually have one.
+    SELECT RFQNUM, VENDOR, MAX(ROWSTAMP) AS max_discount_rowstamp
+    FROM ingestion_framework_test.bid_data_exploration.DISCOUNTHISTORY
+    GROUP BY RFQNUM, VENDOR
+),
+watermark AS (
+    SELECT
+        rv.RFQNUM,
+        rv.VENDOR,
+        GREATEST(
+            r.ENTERDATE,
+            rv.BIDSTATUSDATE,
+            rv.DISCOUNT_SUBMISSION_DATE,
+            rv.DISCOUNT_APPLY_DATE,
+            da.max_discount_rowstamp
+        ) AS last_known_activity_at
+    FROM ingestion_framework_test.bid_data_exploration.rfqvendor rv
+    JOIN ingestion_framework_test.bid_data_exploration.rfq r
+        ON r.RFQNUM = rv.RFQNUM
+    LEFT JOIN discount_activity da
+        ON da.RFQNUM = rv.RFQNUM AND da.VENDOR = rv.VENDOR
+)
+SELECT
+    ql.*,
+    w.last_known_activity_at
+FROM ingestion_framework_test.bid_data_exploration.quotationline ql
+JOIN watermark w
+    ON w.RFQNUM = ql.RFQNUM AND w.VENDOR = ql.VENDOR
+WHERE ql.ORDERUNIT IS NULL OR ql.ORDERUNIT <> 'HEADER'  -- same exclusion backend/api/comparison.py already applies
+```
+
+**The one thing this view can't fix by construction**: `quotationline`
+still has no per-row timestamp, so `last_known_activity_at` is a
+*vendor-level* signal, not a *line-level* one. It tells an incremental
+loader "something about `(RFQNUM, VENDOR)` changed since last time"; it
+does **not** tell it which individual lines changed. The correct
+consumption pattern is therefore:
+
+```sql
+-- Incremental pull: which (RFQNUM, VENDOR) pairs need a full re-pull?
+SELECT DISTINCT RFQNUM, VENDOR, last_known_activity_at
+FROM quotationline_latest
+WHERE last_known_activity_at > :last_successful_high_watermark
+ORDER BY last_known_activity_at
+```
+...then **fully replace every `quotationline` row for each flagged
+`(RFQNUM, VENDOR)`**, not attempt a row-level merge: there is no column
+that could tell you which specific rows within that vendor's bid
+actually changed. `ORDER BY` alone (the original ask) sorts candidates
+for a pass over them; the actual incremental-load *filter* has to be a
+`WHERE last_known_activity_at > checkpoint`, with the new high-watermark
+saved as `MAX(last_known_activity_at)` after a successful run.
+
+**Residual risk, stated plainly**: this is a *stronger* proxy than
+`BIDSTATUSDATE` alone, not a proof. There is still no confirmed
+guarantee that every real `quotationline` mutation moves at least one of
+these four columns; that's an inference from what's been directly
+observed (discount rounds move `DISCOUNT_APPLY_DATE`/`ROWSTAMP`; status
+changes move `BIDSTATUSDATE`), not something verified exhaustively
+against Maximo's write path. Given the demonstrated real gap that
+started this discussion, **a periodic full reconciliation pass on
+`quotationline` (e.g. nightly) is the recommended safety net regardless
+of which watermark strategy is chosen**: incremental-by-watermark
+reduces load, it shouldn't be trusted as the sole source of truth for a
+table already caught silently missing a real price change.
+
+**Open questions for the "discuss tomorrow" follow-up**:
+- Is `rfqvendor.BIDSTATUSDATE` itself reliably populated across orgs, or
+  does it share `TENDERSTATUS`'s "only populated for more recent
+  tenders" gap (~2/3 of `rfq` rows predate that field)? Same question for
+  `DISCOUNT_SUBMISSION_DATE`/`DISCOUNT_APPLY_DATE`.
+- Should `rfq.ENTERDATE` even be in the `GREATEST(...)` at all? It's a
+  creation-only stamp for the tender header, not the vendor's bid; it
+  mostly just sets a floor at tender-creation time and may not add a
+  useful signal beyond what `rfqvendor`/`DISCOUNTHISTORY` already give.
+- Whether this should be a live `VIEW` (always current, recomputed per
+  query, chosen above) or a periodically materialized table: a view
+  costs a join+aggregate per read; a materialized table needs its own
+  refresh schedule and reintroduces a staleness question one level up.
+- Confirm `DISCOUNTHISTORY`'s fully-qualified location and `ROWSTAMP`'s
+  actual type/behavior directly against the live warehouse before
+  relying on it here; still unverified per the round-tracking notes
+  above.
+
+**Not yet done**: this view has not been created against the real
+warehouse, and no DDL grant has been requested for it. This is a design
+draft only, written up for review.

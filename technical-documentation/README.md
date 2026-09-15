@@ -1,4 +1,4 @@
-# TAQA Bid Analyzer — Technical Documentation
+# TAQA Bid Analyzer: Technical Documentation
 
 An AI-assisted commercial bid-analysis tool for TAQA/ADDC procurement,
 built against real tender and vendor-bid data ingested from IBM Maximo
@@ -6,7 +6,7 @@ into Databricks Unity Catalog. It compares vendor pricing line-by-line
 across a BOQ (Bill of Quantities), flags commercial risk (unquoted
 lines, arithmetic errors, statistical outliers, technical/manual
 disqualification, partial-scope bids), tracks pricing across negotiation
-rounds, and produces negotiation-prep summaries — with two optional,
+rounds, and produces negotiation-prep summaries, with two optional,
 clearly-labeled AI-assisted features layered on top.
 
 Deployed as a single Databricks App: a FastAPI backend reading/writing
@@ -32,8 +32,8 @@ picture.
 
 ## Reading order
 
-- **New to the codebase?** Read 01 → 04 → 05 in order, then 02 and 03 for
-  the two features with the most going on underneath them.
+- **New to the codebase?** Read 01 then 04 then 05 in order, then 02 and
+  03 for the two features with the most going on underneath them.
 - **About to build a new feature?** Read 06 (the rules that apply
   everywhere) and 10 (the exact pattern to follow) first.
 - **Something's broken?** Start at 09, then 08 if it looks
@@ -43,7 +43,7 @@ picture.
 ## Source of truth vs. this documentation
 
 `databricks/FINDINGS.md` remains the authoritative, chronological
-data-exploration and design-decision log — every real query result, row
+data-exploration and design-decision log: every real query result, row
 count, corrected theory, and the exact reasoning behind each product
 decision lives there, in the order it was discovered. This
 `technical-documentation/` set is a **distilled, current-state reference**

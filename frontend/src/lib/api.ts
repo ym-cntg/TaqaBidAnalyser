@@ -439,3 +439,91 @@ export async function generateBetaPricing(rfqnum: string, round?: string): Promi
   }
   return res.json();
 }
+
+// ---------------------------------------------------------------------
+// Excel BOQ uploader
+//
+// Standalone feature: these two endpoints parse an uploaded spreadsheet
+// in memory and return the result. Nothing is stored, so unlike every
+// other write path in this app there is no overlay table and no Unity
+// Catalog grant involved.
+// ---------------------------------------------------------------------
+
+export type BoqLineKind = "item" | "section" | "subtotal" | "note";
+export type BoqSheetRole = "boq" | "summary";
+export type BoqLayout = "power" | "water" | "generic";
+
+export interface BoqLine {
+  row_number: number;
+  item_no: string | null;
+  description: string;
+  kind: BoqLineKind;
+  section: string | null;
+  unit: string | null;
+  quantity: number | null;
+  unit_rate: number | null;
+  cif_unit_rate: number | null;
+  cif_total: number | null;
+  erection_unit_rate: number | null;
+  erection_total: number | null;
+  line_total: number | null;
+  non_numeric: Record<string, string>;
+  arithmetic_error: string | null;
+  issue: string | null;
+}
+
+export interface BoqSheet {
+  sheet_name: string;
+  role: BoqSheetRole;
+  layout: BoqLayout;
+  header_row: number;
+  item_count: number;
+  total: number;
+  title_lines: string[];
+  lines: BoqLine[];
+}
+
+export interface BoqReconciliation {
+  extracted_total: number;
+  stated_total: number;
+  difference: number;
+  percent: number;
+  agrees: boolean;
+}
+
+export interface ParsedBoq {
+  source_file: string;
+  tender_ref: string | null;
+  item_count: number;
+  grand_total: number;
+  stated_total: number | null;
+  reconciliation: BoqReconciliation | null;
+  arithmetic_error_count: number;
+  sheets: BoqSheet[];
+  skipped: { sheet_name: string; reason: string }[];
+}
+
+export async function parseExcelBoq(file: File): Promise<ParsedBoq> {
+  const body = new FormData();
+  body.append("file", file);
+  const res = await fetch("/api/excel-boq/parse", { method: "POST", body });
+  return handleJson<ParsedBoq>(res);
+}
+
+export async function exportExcelBoq(file: File): Promise<{ blob: Blob; filename: string }> {
+  const body = new FormData();
+  body.append("file", file);
+  const res = await fetch("/api/excel-boq/export", { method: "POST", body });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new ApiError(res.status, detail?.detail ?? `Request failed with status ${res.status}`);
+  }
+  // Prefer the name the backend chose, so the download matches what the
+  // export endpoint actually produced.
+  const disposition = res.headers.get("Content-Disposition") ?? "";
+  const match = disposition.match(/filename="(.+?)"/);
+  return {
+    blob: await res.blob(),
+    filename: match?.[1] ?? `${file.name.replace(/\.[^.]+$/, "")}-BOQ.xlsx`,
+  };
+}

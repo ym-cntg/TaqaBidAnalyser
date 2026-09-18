@@ -165,7 +165,12 @@ export default function Home() {
         </header>
 
         <div className="mb-6">
-          <Button onClick={() => setPanelOpen((v) => !v)}>{panelOpen ? "Cancel" : "New project"}</Button>
+          <div className="flex items-center gap-2">
+            <Button onClick={() => setPanelOpen((v) => !v)}>{panelOpen ? "Cancel" : "New project"}</Button>
+            <Button variant="outline" render={<Link href="/excel-boq" />}>
+              Excel BOQ extractor
+            </Button>
+          </div>
           {panelOpen && (
             <CreateProjectPanel
               userId={identity.userId}

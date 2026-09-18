@@ -11,4 +11,5 @@ dependencies = [
     "databricks-sql-connector>=3.0.0",
     "databricks-sdk>=0.30.0",
     "openpyxl>=3.1.5",
+    "python-multipart>=0.0.9",
 ]

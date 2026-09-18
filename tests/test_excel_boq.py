@@ -15,8 +15,8 @@ import glob
 import sys
 from io import BytesIO
 
-from backend.excel_boq.generator import to_dict, to_workbook
-from backend.excel_boq.parser import parse_workbook
+from excel_boq_app.excel_boq.generator import to_dict, to_workbook
+from excel_boq_app.excel_boq.parser import parse_workbook
 
 POWER = "data/power/AGPOWER/original/excel/D-111808 BOQ-Lot 1-SHBPRY.xlsx"
 WATER = "data/water/A-20669/003108-PURE WATER TECHNOLOGY. LLC/PWT-BestAndFinalOffer-A-20669pricedBOQ.xlsx"

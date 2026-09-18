@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Excel BOQ Extractor</title>
+<style>
+  :root {
+    --ink: #17222e; --muted: #5d6b7a; --line: #dde3ea; --bg: #f4f6f8;
+    --card: #ffffff; --accent: #12556b; --bad: #a8323f; --bad-bg: #fbebec;
+    --warn: #8a5a12; --warn-bg: #fdf3e0; --ok-bg: #eef2f5;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 1280px; margin: 0 auto; padding: 28px 20px 60px; }
+  h1 { font-size: 21px; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 22px; }
+  #drop {
+    border: 2px dashed var(--line); border-radius: 10px; background: var(--card);
+    padding: 34px 20px; text-align: center; cursor: pointer; transition: .15s;
+  }
+  #drop:hover, #drop.over { border-color: var(--accent); background: #eef5f7; }
+  #drop strong { display: block; font-size: 15px; }
+  #drop span { color: var(--muted); font-size: 13px; }
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 10px; margin-top: 18px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+  .card .k { color: var(--muted); font-size: 12px; }
+  .card .v { font-size: 19px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+  .banner { margin-top: 12px; padding: 12px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--ok-bg); }
+  .banner.bad { border-color: #e3b6bb; background: var(--bad-bg); color: var(--bad); }
+  .banner.warn { border-color: #e8d2a6; background: var(--warn-bg); color: var(--warn); }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin: 20px 0 10px; align-items: center; }
+  .tab {
+    border: 1px solid var(--line); background: var(--card); border-radius: 999px;
+    padding: 5px 12px; cursor: pointer; font-size: 13px; color: var(--ink);
+  }
+  .tab.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .tab .n { opacity: .7; margin-left: 5px; font-size: 11px; }
+  button.dl {
+    margin-left: auto; background: var(--accent); color: #fff; border: 0;
+    border-radius: 7px; padding: 8px 15px; cursor: pointer; font-size: 13px;
+  }
+  button.dl:disabled { opacity: .5; cursor: default; }
+  .tablewrap { background: var(--card); border: 1px solid var(--line); border-radius: 8px; overflow-x: auto; }
+  .meta { padding: 11px 14px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+  .meta b { color: var(--ink); }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; white-space: nowrap; position: sticky; top: 0; background: var(--card); }
+  td.n, th.n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  tr.section td { background: #f0f3f6; font-weight: 600; }
+  tr.subtotal td { color: var(--muted); font-style: italic; }
+  tr.flag td { background: var(--warn-bg); }
+  td.desc { max-width: 430px; }
+  td.issue { color: var(--warn); font-size: 11.5px; max-width: 230px; }
+  .hidden { display: none; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 10px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Excel BOQ Extractor</h1>
+  <p class="sub">
+    Upload a vendor's priced spreadsheet to pull out a normalized bill of quantities.
+    Files are parsed in memory and discarded. Nothing is stored and nothing is written to Maximo.
+  </p>
+
+  <div id="drop">
+    <strong id="dropTitle">Drop an .xlsx file here, or click to browse</strong>
+    <span id="dropSub">Supports the ADDC power template and the water bill template</span>
+    <input id="picker" type="file" accept=".xlsx,.xlsm" class="hidden">
+  </div>
+
+  <div id="err" class="banner bad hidden"></div>
+  <div id="out" class="hidden">
+    <div class="cards" id="cards"></div>
+    <div id="recon"></div>
+    <div id="arith"></div>
+    <div class="tabs" id="tabs"></div>
+    <div class="tablewrap">
+      <div class="meta" id="meta"></div>
+      <table><thead id="thead"></thead><tbody id="tbody"></tbody></table>
+    </div>
+    <div class="note" id="foot"></div>
+  </div>
+</div>
+
+<script>
+const MAX_ROWS = 400;
+const $ = id => document.getElementById(id);
+const drop = $("drop"), picker = $("picker");
+let current = null, parsed = null, active = 0;
+
+const num = v => v == null ? "" : new Intl.NumberFormat("en-AE", { maximumFractionDigits: 0 }).format(v);
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+drop.onclick = () => picker.click();
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => {
+  e.preventDefault(); drop.classList.remove("over");
+  if (e.dataTransfer.files[0]) send(e.dataTransfer.files[0]);
+};
+picker.onchange = e => { if (e.target.files[0]) send(e.target.files[0]); e.target.value = ""; };
+
+function fail(msg) { $("err").textContent = msg; $("err").classList.remove("hidden"); }
+
+async function send(file) {
+  current = file; parsed = null; active = 0;
+  $("err").classList.add("hidden"); $("out").classList.add("hidden");
+  $("dropTitle").textContent = "Parsing " + file.name + "...";
+  const body = new FormData(); body.append("file", file);
+  try {
+    const res = await fetch("/api/parse", { method: "POST", body });
+    const data = await res.json().catch(() => null);
+    if (!res.ok) { fail((data && data.detail) || ("Request failed with status " + res.status)); return; }
+    parsed = data;
+    active = Math.max(0, data.sheets.findIndex(s => s.role === "boq"));
+    render();
+  } catch (e) {
+    fail(String(e));
+  } finally {
+    $("dropTitle").textContent = "Drop an .xlsx file here, or click to browse";
+    $("dropSub").textContent = file.name;
+  }
+}
+
+async function download() {
+  if (!current) return;
+  const btn = $("dlBtn"); btn.disabled = true; btn.textContent = "Building...";
+  const body = new FormData(); body.append("file", current);
+  try {
+    const res = await fetch("/api/export", { method: "POST", body });
+    if (!res.ok) {
+      const d = await res.json().catch(() => null);
+      fail((d && d.detail) || ("Export failed with status " + res.status)); return;
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") || "";
+    const m = cd.match(/filename="(.+?)"/);
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = m ? m[1] : current.name.replace(/\.[^.]+$/, "") + "-BOQ.xlsx";
+    a.click(); URL.revokeObjectURL(a.href);
+  } finally {
+    btn.disabled = false; btn.textContent = "Download normalized BOQ";
+  }
+}
+
+function render() {
+  const d = parsed;
+  $("out").classList.remove("hidden");
+
+  $("cards").innerHTML = [
+    ["Tender", d.tender_ref || "Not found"],
+    ["Priced lines", num(d.item_count)],
+    ["Extracted total", num(d.grand_total)],
+    ["Vendor stated total", d.stated_total == null ? "Not stated" : num(d.stated_total)],
+  ].map(([k, v]) => `<div class="card"><div class="k">${esc(k)}</div><div class="v">${esc(v)}</div></div>`).join("");
+
+  const r = d.reconciliation;
+  $("recon").innerHTML = !r ? "" : r.agrees
+    ? `<div class="banner"><b>Reconciles.</b> The extracted line items match the vendor's own
+       stated total to within ${r.percent.toFixed(2)}%.</div>`
+    : `<div class="banner bad"><b>Does not reconcile.</b> Extracted lines total ${num(r.extracted_total)}
+       but the vendor's summary sheet states ${num(r.stated_total)}, a difference of
+       ${num(Math.abs(r.difference))} (${r.percent.toFixed(2)}%). Either the extraction missed lines,
+       or the vendor's own summary disagrees with their priced detail.</div>`;
+
+  $("arith").innerHTML = d.arithmetic_error_count > 0
+    ? `<div class="banner warn"><b>${d.arithmetic_error_count}</b> line(s) have a quantity times rate
+       that does not equal the stated total. Flagged below and highlighted in the export.</div>`
+    : "";
+
+  $("tabs").innerHTML = d.sheets.map((s, i) =>
+    `<button class="tab ${i === active ? "on" : ""}" data-i="${i}">${esc(s.sheet_name)}
+     <span class="n">${s.role === "summary" ? "summary" : s.item_count}</span></button>`
+  ).join("") + `<button class="dl" id="dlBtn">Download normalized BOQ</button>`;
+  $("tabs").querySelectorAll(".tab").forEach(b => b.onclick = () => { active = +b.dataset.i; render(); });
+  $("dlBtn").onclick = download;
+
+  const sh = d.sheets[active];
+  const power = sh.layout === "power";
+  $("meta").innerHTML = `<b>${esc(sh.sheet_name)}</b> &middot; ${esc(sh.layout)} layout &middot;
+    header on row ${sh.header_row} &middot; sheet total <b>${num(sh.total)}</b>`;
+
+  $("thead").innerHTML = "<tr>" + ["Item", "Description", "Unit", "Qty"]
+    .map(h => `<th${h === "Qty" ? ' class="n"' : ""}>${h}</th>`).join("")
+    + (power
+      ? ["CIF rate", "CIF total", "Erect. rate", "Erect. total"].map(h => `<th class="n">${h}</th>`).join("")
+      : `<th class="n">Unit rate</th>`)
+    + `<th class="n">Line total</th><th>Issue</th></tr>`;
+
+  const rows = sh.lines.filter(l => l.kind !== "note");
+  $("tbody").innerHTML = rows.slice(0, MAX_ROWS).map(l => {
+    const cls = l.kind === "section" ? "section" : l.kind === "subtotal" ? "subtotal" : l.issue ? "flag" : "";
+    const money = power
+      ? [l.cif_unit_rate, l.cif_total, l.erection_unit_rate, l.erection_total]
+      : [l.unit_rate];
+    return `<tr class="${cls}">
+      <td>${esc(l.item_no || "")}</td>
+      <td class="desc">${esc(l.description)}</td>
+      <td>${esc(l.unit || "")}</td>
+      <td class="n">${num(l.quantity)}</td>
+      ${money.map(v => `<td class="n">${num(v)}</td>`).join("")}
+      <td class="n"><b>${num(l.line_total)}</b></td>
+      <td class="issue">${esc(l.issue || "")}</td></tr>`;
+  }).join("");
+
+  const hidden = rows.length - Math.min(rows.length, MAX_ROWS);
+  const skipped = d.skipped.length
+    ? " Skipped sheets: " + d.skipped.map(s => `${s.sheet_name} (${s.reason})`).join(", ") + "."
+    : "";
+  $("foot").textContent =
+    (hidden > 0 ? `Showing the first ${MAX_ROWS} rows. ${num(hidden)} more are in the downloadable workbook.` : "")
+    + skipped;
+}
+</script>
+</body>
+</html>

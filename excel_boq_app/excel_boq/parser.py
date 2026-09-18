@@ -24,7 +24,7 @@ from typing import Any
 
 import openpyxl
 
-from backend.excel_boq.models import (
+from .models import (
     BoqDocument,
     BoqLine,
     BoqSheet,

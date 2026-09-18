@@ -18,15 +18,17 @@ automates the copy and the two checks.
 
 ## Using it
 
-**Web page**: `/excel-boq`, linked from the Projects landing page. Drop
-a file, see the extracted BOQ per sheet, download the normalized
-workbook.
+**Standalone app**: the deployable client-testing app one level up.
+See [../README.md](../README.md).
+
+**Web page in the main app**: `/excel-boq`, linked from the Projects
+landing page.
 
 **CLI**, for a folder of files without starting the app:
 
 ```bash
-python -m backend.excel_boq.cli data/power/AGPOWER/original/excel/*.xlsx
-python -m backend.excel_boq.cli <one file.xlsx> --xlsx out.xlsx --json out.json
+python -m excel_boq_app.excel_boq.cli data/power/AGPOWER/original/excel/*.xlsx
+python -m excel_boq_app.excel_boq.cli <one file.xlsx> --xlsx out.xlsx --json out.json
 ```
 
 **API**:

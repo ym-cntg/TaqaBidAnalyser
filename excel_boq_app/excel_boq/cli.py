@@ -1,4 +1,4 @@
-"""Command-line entry point: python -m backend.excel_boq.cli <files...>
+"""Command-line entry point: python -m excel_boq_app.excel_boq.cli <files...>
 
 Exists so the extraction can be exercised against a folder of real
 vendor files without starting the app or touching Databricks.
@@ -11,8 +11,8 @@ import json
 import sys
 from pathlib import Path
 
-from backend.excel_boq.generator import to_dict, to_workbook
-from backend.excel_boq.parser import parse_workbook
+from .generator import to_dict, to_workbook
+from .parser import parse_workbook
 
 
 def _report(document) -> None:

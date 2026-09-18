@@ -15,8 +15,8 @@ from io import BytesIO
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 
-from backend.excel_boq.generator import to_dict, to_workbook
-from backend.excel_boq.parser import parse_workbook
+from excel_boq_app.excel_boq.generator import to_dict, to_workbook
+from excel_boq_app.excel_boq.parser import parse_workbook
 
 router = APIRouter(tags=["excel-boq"])
 

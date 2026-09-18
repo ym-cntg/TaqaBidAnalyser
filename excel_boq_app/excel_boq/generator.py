@@ -16,7 +16,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from backend.excel_boq.models import BoqDocument
+from .models import BoqDocument
 
 # One flat set of columns covering both source layouts. A power sheet
 # leaves Unit Rate empty; a water sheet leaves the CIF/Erection columns

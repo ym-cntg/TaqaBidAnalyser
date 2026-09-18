@@ -6,14 +6,14 @@ pure in-memory parsing so it can be tested without a warehouse
 connection and without any Unity Catalog grant.
 """
 
-from backend.excel_boq.models import (
+from .models import (
     BoqDocument,
     BoqLine,
     BoqSheet,
     ColumnMap,
     Reconciliation,
 )
-from backend.excel_boq.parser import parse_workbook
+from .parser import parse_workbook
 
 __all__ = [
     "BoqDocument",

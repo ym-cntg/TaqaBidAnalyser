@@ -204,10 +204,13 @@ def _heuristic_estimates(lines: list[dict], qty_by_line: dict[float, float | Non
     """
     out = []
     for line in lines:
-        quotes = _quoted_unit_costs(line)
-        if not quotes:
+        try:
+            quotes = _quoted_unit_costs(line)
+            if not quotes:
+                continue
+            unit_cost = float(median(quotes))
+        except Exception:
             continue
-        unit_cost = float(median(quotes))
         if not (unit_cost > 0):
             continue
         linenum = line["rfqlinenum"]
@@ -226,6 +229,18 @@ def _heuristic_estimates(lines: list[dict], qty_by_line: dict[float, float | Non
             )
         )
     return out
+
+
+def _make_client() -> tuple[object | None, str | None]:
+    """WorkspaceClient() resolves credentials at construction time and
+    raises if it cannot. In a deployed app that is a real possibility
+    (no injected service-principal credentials, or a conflicting
+    DATABRICKS_* env var), and it was previously unguarded, so it
+    surfaced as a bare 500 before any fallback could run."""
+    try:
+        return WorkspaceClient(), None
+    except Exception as exc:
+        return None, f"Could not initialise the Databricks client: {type(exc).__name__}: {exc}"
 
 
 def _query_batch(
@@ -281,7 +296,18 @@ def build_ai_pricing(rfqnum: str, round_label: str | None = None) -> dict:
     Degrades rather than fails: any line the model could not price falls
     back to the peer-median heuristic, and the caller is told so.
     """
-    comparison = build_comparison(rfqnum, round_label=round_label)
+    try:
+        comparison = build_comparison(rfqnum, round_label=round_label)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # Nothing to fall back to: the heuristic needs the vendor quotes
+        # that this call returns. Fail with the real reason rather than
+        # an opaque 500.
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not load the BOQ comparison to price against: {type(exc).__name__}: {exc}",
+        ) from exc
 
     all_lines = comparison["lines"]
     total_line_count = comparison["total_line_count"]
@@ -306,13 +332,23 @@ def build_ai_pricing(rfqnum: str, round_label: str | None = None) -> dict:
         failures.append(str(exc.detail))
 
     if endpoint is not None:
-        client = WorkspaceClient()
-        for i in range(0, len(selected_lines), AI_BATCH_SIZE):
-            batch = selected_lines[i : i + AI_BATCH_SIZE]
-            estimates, reason = _query_batch(client, endpoint, batch, qty_by_line)
-            results.extend(estimates)
-            if reason:
-                failures.append(reason)
+        client, client_error = _make_client()
+        if client_error:
+            failures.append(client_error)
+        if client is not None:
+            try:
+                for i in range(0, len(selected_lines), AI_BATCH_SIZE):
+                    batch = selected_lines[i : i + AI_BATCH_SIZE]
+                    estimates, reason = _query_batch(client, endpoint, batch, qty_by_line)
+                    results.extend(estimates)
+                    if reason:
+                        failures.append(reason)
+            except Exception as exc:
+                # Belt and braces. _query_batch already swallows its own
+                # failures, so reaching here means something unforeseen,
+                # and the whole point of this feature is that unforeseen
+                # is still not allowed to produce an error page.
+                failures.append(f"Unexpected error while estimating: {type(exc).__name__}: {exc}")
         priced = {r["rfqlinenum"] for r in results}
 
     # Any line the model skipped or could not be asked about, including
@@ -343,4 +379,15 @@ def build_ai_pricing(rfqnum: str, round_label: str | None = None) -> dict:
 
 @router.post("/rfqs/{rfqnum}/comparison/ai-pricing")
 async def generate_ai_pricing(rfqnum: str, round: str | None = None):
-    return build_ai_pricing(rfqnum, round_label=round)
+    try:
+        return build_ai_pricing(rfqnum, round_label=round)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        # A bare 500 tells the analyst nothing and tells whoever is
+        # debugging even less. Anything that escapes the fallbacks above
+        # still comes back with its real cause attached.
+        raise HTTPException(
+            status_code=503,
+            detail=f"Could not generate AI prices: {type(exc).__name__}: {exc}",
+        ) from exc

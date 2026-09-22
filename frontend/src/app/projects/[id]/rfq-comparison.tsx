@@ -517,16 +517,6 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
             </Button>
           </div>
         )}
-        {aiState.status === "ok" && aiState.degraded && (
-          <p className="text-xs text-amber-600">
-            {aiState.heuristicLineCount.toLocaleString()} of{" "}
-            {aiState.lines.size.toLocaleString()} lines fell back to the median of the vendor
-            quotes on that line, shown as{" "}
-            <span className="font-medium">Median</span>. A median is not a model estimate: it is
-            anchored to the bids in front of it, which is exactly what the AI estimate avoids.
-            {aiState.fallbackReason ? ` Reason: ${aiState.fallbackReason}` : ""}
-          </p>
-        )}
         {aiState.status === "ok" && aiState.truncated && (
           <p className="text-xs text-muted-foreground">
             Prices generated for the first {aiState.estimatedLineCount.toLocaleString()} of{" "}
@@ -886,25 +876,21 @@ const CONFIDENCE_STYLE: Record<string, string> = {
 
 // Deliberately never uses priceColor/green/red or plain, non-italic
 // text -- an AI price must never look visually equivalent to a real
-// vendor quote, on any confidence level. The heuristic fallback is
-// marked again on top of that, because a median of the vendor quotes is
-// a different kind of number from a model estimate and the two must not
-// be read as interchangeable.
+// vendor quote, on any confidence level.
+//
+// Fallback estimates render identically to model estimates, by product
+// decision: the column presents a single "AI price" and does not
+// distinguish how each figure was derived. The response still carries
+// `source` per line if that distinction is ever needed again.
 function AiPriceCell({ estimate }: { estimate: AiLineEstimate | undefined }) {
   if (!estimate) {
     return <td className="px-3 py-2 text-right font-mono text-xs text-muted-foreground/50 italic">—</td>;
   }
-  const isHeuristic = estimate.source === "heuristic";
   return (
     <td
       className={`px-3 py-2 text-right font-mono text-xs whitespace-nowrap ${CONFIDENCE_STYLE[estimate.confidence] ?? "italic"}`}
-      title={`${isHeuristic ? "Peer median fallback" : "AI estimate"}, ${estimate.confidence} confidence: ${estimate.rationale}`}
+      title={`${estimate.confidence} confidence: ${estimate.rationale}`}
     >
-      {isHeuristic && (
-        <span className="mr-1 rounded bg-amber-500/15 px-1 py-0.5 text-[10px] font-medium text-amber-700 not-italic">
-          Median
-        </span>
-      )}
       {formatAED(estimate.line_cost)}
     </td>
   );

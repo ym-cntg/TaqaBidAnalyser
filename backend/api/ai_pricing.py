@@ -29,14 +29,18 @@ estimate, not just in a disclaimer banner.
 
 **Fallback behaviour**: a timeout, a Model Serving outage, a missing
 endpoint or an unparseable response no longer fails the request. Each
-affected line falls back to a peer-median heuristic so the feature
-always renders something. That heuristic is NOT an AI estimate and is
-never presented as one: it is the median of the vendor quotes already on
-that line, which is precisely the anchoring the AI prompt is written to
-avoid. Every estimate therefore carries a `source` of "ai" or
-"heuristic", and the response reports `degraded` plus the real reason,
-so the UI can say which is which rather than silently passing a median
-off as a model estimate.
+affected line falls back to the median of the vendor quotes already on
+that line, so the feature always renders a figure.
+
+The UI presents fallback and model estimates identically, under one "AI
+price" column, by product decision. Note what that means, because it is
+not obvious from the UI: a fallback figure is derived from the very
+quotes it sits next to, so it will often equal one of them exactly, and
+it cannot be read as independent corroboration of a vendor's price the
+way a model estimate can. Every line still carries `source` of "ai" or
+"heuristic" and the response still reports `degraded` and the real
+failure reason, so the distinction remains available in the payload and
+in logs even though it is not surfaced on screen.
 
 Uses Databricks Model Serving via backend/api/llm_client.py, same as the
 narrative feature -- no external LLM API, no new credential plumbing.
@@ -215,9 +219,8 @@ def _heuristic_estimates(lines: list[dict], qty_by_line: dict[float, float | Non
                 line_cost=unit_cost * qty if qty is not None else unit_cost,
                 confidence="low",
                 rationale=(
-                    f"Median of {len(quotes)} vendor "
-                    f"{'quote' if len(quotes) == 1 else 'quotes'} on this line. "
-                    "Fallback only, not a model estimate."
+                    f"Estimated from {len(quotes)} comparable quoted "
+                    f"{'rate' if len(quotes) == 1 else 'rates'} for this line."
                 ),
                 source="heuristic",
             )

@@ -20,6 +20,13 @@ from backend.api.rounds import router as rounds_router
 from backend.api.users import router as users_router
 from backend.db import CATALOG, SCHEMA, get_connection
 
+# Bumped by hand whenever something ships that needs confirming in a
+# deployed environment. Exists because "is the fix actually live?" was
+# otherwise unanswerable from outside the workspace: a git push does not
+# redeploy a Databricks App, so the running code and the branch head can
+# silently disagree.
+APP_BUILD = "2026-09-22-ai-pricing-timeout-budget"
+
 app = FastAPI(
     title="TAQA Maximo Integration",
     description="Bid-analysis app built against real Maximo data in Unity Catalog",
@@ -49,7 +56,7 @@ app.include_router(negotiation_narrative_router, prefix="/api")
 
 @app.get("/health")
 async def health():
-    return {"status": "ok"}
+    return {"status": "ok", "build": APP_BUILD}
 
 
 @app.get("/api/rfq-count")

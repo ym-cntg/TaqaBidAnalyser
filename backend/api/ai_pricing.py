@@ -47,7 +47,8 @@ narrative feature -- no external LLM API, no new credential plumbing.
 """
 
 import json
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+import threading
+import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from statistics import median
@@ -76,15 +77,30 @@ TEMPERATURE = 0.3
 # The SDK's query() takes no timeout of its own, so each batch runs in a
 # worker thread and is abandoned after this long. Without it a hung
 # endpoint hangs the whole request with no way back.
-BATCH_TIMEOUT_SECONDS = 30
+BATCH_TIMEOUT_SECONDS = 15
 
-# Deliberately a long-lived module-level pool rather than a `with
-# ThreadPoolExecutor(...)` per batch. The context manager shuts down
-# with wait=True, which blocks until the worker finishes, so a hung
-# Model Serving call would still hold the request for its full duration
-# even though the timeout had already fired. Abandoning the future on a
-# shared pool is what actually makes the timeout bound the response.
-_EXECUTOR = ThreadPoolExecutor(max_workers=4, thread_name_prefix="ai-pricing")
+# A cap on the whole model phase, not just one batch, which is what
+# actually matters. A per-batch timeout alone let a full BOQ take
+# 3 x BATCH_TIMEOUT, and this request travels through the Next.js
+# rewrite proxy and the Databricks Apps gateway, each with its own
+# limit. Exceeding those surfaces to the browser as a 500 that FastAPI
+# never produced and cannot catch, so the response has to come back well
+# inside them. Whatever is unpriced when the budget runs out falls back
+# to the heuristic like any other failure.
+MODEL_BUDGET_SECONDS = 20
+
+# Each batch runs on its own daemon thread rather than a
+# ThreadPoolExecutor. Two reasons, both learned the hard way:
+#
+# A `with ThreadPoolExecutor(...)` per batch shuts down with wait=True,
+# so a hung call still held the request for its full duration even after
+# the timeout fired. A shared module-level pool fixed that but left a
+# worse problem: its threads are non-daemon, and concurrent.futures
+# registers an atexit hook that joins them, so a hung Model Serving call
+# would block the whole process from exiting on a restart or redeploy.
+#
+# A daemon thread has neither property. It is abandoned cleanly on
+# timeout and never delays interpreter shutdown.
 
 _SYSTEM_PROMPT = (
     "You are assisting a procurement analyst reviewing a construction tender bid "
@@ -244,7 +260,11 @@ def _make_client() -> tuple[object | None, str | None]:
 
 
 def _query_batch(
-    client, endpoint: str, lines: list[dict], qty_by_line: dict[float, float | None]
+    client,
+    endpoint: str,
+    lines: list[dict],
+    qty_by_line: dict[float, float | None],
+    timeout: float,
 ) -> tuple[list[dict], str | None]:
     """Returns (estimates, failure_reason). Never raises: a failure here
     is handled by the caller falling back to the heuristic, because the
@@ -264,19 +284,27 @@ def _query_batch(
         )
         return response.choices[0].message.content
 
-    future = _EXECUTOR.submit(call)
-    try:
-        raw = future.result(timeout=BATCH_TIMEOUT_SECONDS)
-    except FuturesTimeout:
-        # Cancels it only if it never started; a call already in flight
-        # is simply left to finish into nothing.
-        future.cancel()
-        return [], f"Model Serving did not respond within {BATCH_TIMEOUT_SECONDS}s"
-    except Exception as exc:
+    outcome: dict = {}
+
+    def runner():
+        try:
+            outcome["raw"] = call()
+        except Exception as exc:  # captured, not raised: nothing can catch it off-thread
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=runner, name="ai-pricing-batch", daemon=True)
+    worker.start()
+    worker.join(timeout)
+
+    if worker.is_alive():
+        return [], f"Model Serving did not respond within {timeout:.0f}s"
+    if "error" in outcome:
         return [], (
-            f"Model Serving call failed: {exc}. If this is a permission error, the app's "
-            f"service principal likely needs 'Can Query' granted on the {endpoint!r} endpoint."
+            f"Model Serving call failed: {outcome['error']}. If this is a permission error, "
+            f"the app's service principal likely needs 'Can Query' granted on the "
+            f"{endpoint!r} endpoint."
         )
+    raw = outcome.get("raw")
 
     try:
         parsed = _parse_response(raw)
@@ -336,10 +364,23 @@ def build_ai_pricing(rfqnum: str, round_label: str | None = None) -> dict:
         if client_error:
             failures.append(client_error)
         if client is not None:
+            deadline = time.monotonic() + MODEL_BUDGET_SECONDS
             try:
                 for i in range(0, len(selected_lines), AI_BATCH_SIZE):
+                    remaining = deadline - time.monotonic()
+                    if remaining < 2:
+                        # Not enough left to be worth a round trip; the
+                        # rest of the BOQ falls back below.
+                        failures.append(
+                            f"Stopped after {MODEL_BUDGET_SECONDS}s to keep the response "
+                            "inside the gateway timeout"
+                        )
+                        break
                     batch = selected_lines[i : i + AI_BATCH_SIZE]
-                    estimates, reason = _query_batch(client, endpoint, batch, qty_by_line)
+                    estimates, reason = _query_batch(
+                        client, endpoint, batch, qty_by_line,
+                        timeout=min(BATCH_TIMEOUT_SECONDS, remaining),
+                    )
                     results.extend(estimates)
                     if reason:
                         failures.append(reason)

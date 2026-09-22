@@ -7,7 +7,7 @@ load_dotenv()
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.api.beta_pricing import router as beta_pricing_router
+from backend.api.ai_pricing import router as ai_pricing_router
 from backend.api.comparison import router as comparison_router
 from backend.api.corrections import router as corrections_router
 from backend.api.disqualifications import router as disqualifications_router
@@ -39,7 +39,7 @@ app.include_router(rfqs_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
 app.include_router(projects_router, prefix="/api")
 app.include_router(comparison_router, prefix="/api")
-app.include_router(beta_pricing_router, prefix="/api")
+app.include_router(ai_pricing_router, prefix="/api")
 app.include_router(corrections_router, prefix="/api")
 app.include_router(disqualifications_router, prefix="/api")
 app.include_router(excel_boq_router, prefix="/api")

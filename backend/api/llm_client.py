@@ -1,5 +1,5 @@
 """Shared Databricks Model Serving config -- used by every AI feature in
-this app (backend/api/negotiation_narrative.py, backend/api/beta_pricing.py)
+this app (backend/api/negotiation_narrative.py, backend/api/ai_pricing.py)
 so there's exactly one place that knows the env var name and the
 not-configured error message.
 

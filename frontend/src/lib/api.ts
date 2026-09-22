@@ -386,7 +386,7 @@ export interface NarrativeReport {
 // (502 -- the model call failed, or came back in an unusable shape) so
 // the UI can show setup instructions instead of a raw error only in the
 // one case that's actually about configuration, not a real failure.
-// Shared by every AI feature (negotiation narrative, Beta pricing) --
+// Shared by every AI feature (negotiation narrative, AI pricing) --
 // the distinction isn't narrative-specific.
 export class AiUnavailableError extends Error {
   status: number;
@@ -410,27 +410,34 @@ export async function generateNegotiationNarrative(rfqnum: string): Promise<Narr
   return res.json();
 }
 
-export interface BetaLineEstimate {
+export interface AiLineEstimate {
   rfqlinenum: number;
-  beta_unit_cost: number;
-  beta_line_cost: number;
+  unit_cost: number;
+  line_cost: number;
   confidence: "low" | "medium" | "high";
   rationale: string;
+  // "ai" is a model estimate; "heuristic" is the peer-median fallback
+  // used when the model is unavailable. They answer different
+  // questions, so the UI keeps them visually distinct.
+  source: "ai" | "heuristic";
 }
 
-export interface BetaPricingResponse {
+export interface AiPricingResponse {
   rfqnum: string;
   round: string;
   generated_at: string;
   truncated: boolean;
   total_line_count: number;
   estimated_line_count: number;
-  lines: BetaLineEstimate[];
+  heuristic_line_count: number;
+  degraded: boolean;
+  fallback_reason: string | null;
+  lines: AiLineEstimate[];
 }
 
-export async function generateBetaPricing(rfqnum: string, round?: string): Promise<BetaPricingResponse> {
+export async function generateAiPricing(rfqnum: string, round?: string): Promise<AiPricingResponse> {
   const qs = round ? `?round=${encodeURIComponent(round)}` : "";
-  const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqnum)}/comparison/beta${qs}`, {
+  const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqnum)}/comparison/ai-pricing${qs}`, {
     method: "POST",
   });
   if (!res.ok) {

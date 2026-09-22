@@ -6,13 +6,12 @@ import { useEffect, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
-  AiUnavailableError,
   createCorrection,
-  generateBetaPricing,
+  generateAiPricing,
   getComparison,
   setDisqualification,
   setPartialBid,
-  type BetaLineEstimate,
+  type AiLineEstimate,
   type ComparisonLinePrice,
   type ComparisonResponse,
 } from "@/lib/api";
@@ -20,11 +19,19 @@ import { formatAED, formatNumber } from "@/lib/format";
 import { getCachedIdentity } from "@/lib/identity";
 import { formatRoundLabel } from "@/lib/rounds";
 
-type BetaState =
+type AiPricingState =
   | { status: "idle" }
   | { status: "loading" }
-  | { status: "ok"; lines: Map<number, BetaLineEstimate>; truncated: boolean; totalLineCount: number; estimatedLineCount: number }
-  | { status: "not-configured"; message: string }
+  | {
+      status: "ok";
+      lines: Map<number, AiLineEstimate>;
+      truncated: boolean;
+      totalLineCount: number;
+      estimatedLineCount: number;
+      heuristicLineCount: number;
+      degraded: boolean;
+      fallbackReason: string | null;
+    }
   | { status: "error"; message: string };
 
 function vendorLabel(vendor: string, name: string | null): string {
@@ -67,7 +74,7 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
   const [disqualifySaving, setDisqualifySaving] = useState(false);
   const [disqualifyError, setDisqualifyError] = useState<string | null>(null);
 
-  const [betaState, setBetaState] = useState<BetaState>({ status: "idle" });
+  const [aiState, setAiState] = useState<AiPricingState>({ status: "idle" });
 
   const [partialSaving, setPartialSaving] = useState<string | null>(null);
   const [partialError, setPartialError] = useState<string | null>(null);
@@ -91,7 +98,7 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
 
   useEffect(() => {
     setRound(undefined);
-    setBetaState({ status: "idle" });
+    setAiState({ status: "idle" });
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rfqnum]);
@@ -100,29 +107,31 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
     setRound(newRound);
     setEditing(null);
     setDisqualifying(null);
-    setBetaState({ status: "idle" });
+    setAiState({ status: "idle" });
     load(newRound);
   }
 
-  function generateBeta() {
-    setBetaState({ status: "loading" });
-    generateBetaPricing(rfqnum, round)
+  // The backend falls back to a peer-median heuristic rather than
+  // failing, so there is no longer a "not configured" branch here: an
+  // unset endpoint comes back as a degraded result, not an error.
+  function generateAi() {
+    setAiState({ status: "loading" });
+    generateAiPricing(rfqnum, round)
       .then((res) => {
         const lines = new Map(res.lines.map((l) => [l.rfqlinenum, l]));
-        setBetaState({
+        setAiState({
           status: "ok",
           lines,
           truncated: res.truncated,
           totalLineCount: res.total_line_count,
           estimatedLineCount: res.estimated_line_count,
+          heuristicLineCount: res.heuristic_line_count,
+          degraded: res.degraded,
+          fallbackReason: res.fallback_reason,
         });
       })
       .catch((err) => {
-        if (err instanceof AiUnavailableError && err.notConfigured) {
-          setBetaState({ status: "not-configured", message: err.message });
-        } else {
-          setBetaState({ status: "error", message: err instanceof Error ? err.message : String(err) });
-        }
+        setAiState({ status: "error", message: err instanceof Error ? err.message : String(err) });
       });
   }
 
@@ -475,46 +484,53 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
         </p>
       )}
 
-      {/* Beta (AI-estimated) pricing */}
+      {/* AI generated prices */}
       <div className="rounded-xl border border-border/60 bg-muted/20 px-4 py-3 space-y-2">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <Sparkles className="h-4 w-4 text-primary" />
-            <span className="font-semibold text-sm">Beta — AI-estimated price</span>
+            <span className="font-semibold text-sm">AI generated prices</span>
           </div>
           <Button
             variant="outline"
             size="sm"
-            onClick={generateBeta}
-            disabled={betaState.status === "loading"}
+            onClick={generateAi}
+            disabled={aiState.status === "loading"}
           >
             <Sparkles className="h-4 w-4" />
-            {betaState.status === "ok" ? "Regenerate" : "Generate Beta prices"}
+            {aiState.status === "ok" ? "Regenerate" : "Generate AI prices"}
           </Button>
         </div>
         <p className="text-xs text-muted-foreground">
           The model estimates a fair unit price per line from its own general knowledge, using the
-          vendor quotes only as context — not a market-rate lookup, not a benchmark, and not
+          vendor quotes only as context, not a market-rate lookup, not a benchmark, and not
           something to cite in a negotiation. Always check the confidence level shown per line.
         </p>
-        {betaState.status === "loading" && (
-          <p className="text-xs text-muted-foreground animate-pulse">Generating Beta estimates…</p>
+        {aiState.status === "loading" && (
+          <p className="text-xs text-muted-foreground animate-pulse">Generating AI prices…</p>
         )}
-        {betaState.status === "not-configured" && (
-          <p className="text-xs text-amber-600">Beta pricing isn&apos;t set up yet: {betaState.message}</p>
-        )}
-        {betaState.status === "error" && (
+        {aiState.status === "error" && (
           <div className="flex items-center gap-2">
-            <p className="text-xs text-red-600">{betaState.message}</p>
-            <Button variant="outline" size="sm" onClick={generateBeta}>
+            <p className="text-xs text-red-600">{aiState.message}</p>
+            <Button variant="outline" size="sm" onClick={generateAi}>
               Try again
             </Button>
           </div>
         )}
-        {betaState.status === "ok" && betaState.truncated && (
+        {aiState.status === "ok" && aiState.degraded && (
+          <p className="text-xs text-amber-600">
+            {aiState.heuristicLineCount.toLocaleString()} of{" "}
+            {aiState.lines.size.toLocaleString()} lines fell back to the median of the vendor
+            quotes on that line, shown as{" "}
+            <span className="font-medium">Median</span>. A median is not a model estimate: it is
+            anchored to the bids in front of it, which is exactly what the AI estimate avoids.
+            {aiState.fallbackReason ? ` Reason: ${aiState.fallbackReason}` : ""}
+          </p>
+        )}
+        {aiState.status === "ok" && aiState.truncated && (
           <p className="text-xs text-muted-foreground">
-            Beta estimates generated for the first {betaState.estimatedLineCount.toLocaleString()} of{" "}
-            {betaState.totalLineCount.toLocaleString()} lines.
+            Prices generated for the first {aiState.estimatedLineCount.toLocaleString()} of{" "}
+            {aiState.totalLineCount.toLocaleString()} lines.
           </p>
         )}
       </div>
@@ -545,11 +561,11 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
                     {vendorLabel(v.vendor, v.name)}
                   </th>
                 ))}
-                {betaState.status === "ok" && (
-                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground w-32">
+                {aiState.status === "ok" && (
+                  <th className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground w-44">
                     <span className="inline-flex items-center gap-1 justify-end">
                       <Sparkles className="h-3 w-3 text-primary" />
-                      Beta (AI est.)
+                      AI price
                     </span>
                   </th>
                 )}
@@ -606,7 +622,7 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
                         onCancelDisqualify={cancelDisqualify}
                       />
                     ))}
-                    {betaState.status === "ok" && <BetaCell estimate={betaState.lines.get(line.rfqlinenum)} />}
+                    {aiState.status === "ok" && <AiPriceCell estimate={aiState.lines.get(line.rfqlinenum)} />}
                   </tr>
                 );
               })}
@@ -869,18 +885,27 @@ const CONFIDENCE_STYLE: Record<string, string> = {
 };
 
 // Deliberately never uses priceColor/green/red or plain, non-italic
-// text -- Beta must never look visually equivalent to a real vendor
-// quote, on any confidence level.
-function BetaCell({ estimate }: { estimate: BetaLineEstimate | undefined }) {
+// text -- an AI price must never look visually equivalent to a real
+// vendor quote, on any confidence level. The heuristic fallback is
+// marked again on top of that, because a median of the vendor quotes is
+// a different kind of number from a model estimate and the two must not
+// be read as interchangeable.
+function AiPriceCell({ estimate }: { estimate: AiLineEstimate | undefined }) {
   if (!estimate) {
     return <td className="px-3 py-2 text-right font-mono text-xs text-muted-foreground/50 italic">—</td>;
   }
+  const isHeuristic = estimate.source === "heuristic";
   return (
     <td
-      className={`px-3 py-2 text-right font-mono text-xs ${CONFIDENCE_STYLE[estimate.confidence] ?? "italic"}`}
-      title={`${estimate.confidence} confidence — ${estimate.rationale}`}
+      className={`px-3 py-2 text-right font-mono text-xs whitespace-nowrap ${CONFIDENCE_STYLE[estimate.confidence] ?? "italic"}`}
+      title={`${isHeuristic ? "Peer median fallback" : "AI estimate"}, ${estimate.confidence} confidence: ${estimate.rationale}`}
     >
-      {formatAED(estimate.beta_line_cost)}
+      {isHeuristic && (
+        <span className="mr-1 rounded bg-amber-500/15 px-1 py-0.5 text-[10px] font-medium text-amber-700 not-italic">
+          Median
+        </span>
+      )}
+      {formatAED(estimate.line_cost)}
     </td>
   );
 }

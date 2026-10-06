@@ -538,15 +538,20 @@ export async function addUploadFile(
   roundLabel: string,
   vendorName?: string,
 ): Promise<UploadProject> {
-  const body = new FormData();
-  body.append("file", file);
-  body.append("vendor", vendor);
-  body.append("round_label", roundLabel);
-  if (vendorName) body.append("vendor_name", vendorName);
-  return handleJson(await fetch(`/api/uploads/${encodeURIComponent(projectId)}/files`, {
-    method: "POST",
-    body,
-  }));
+  // Raw body rather than FormData: the backend takes the spreadsheet as
+  // the request body with its metadata in the query string, so the
+  // deploy does not need python-multipart installed. See
+  // backend/api/uploads.py's add_file.
+  const qs = new URLSearchParams({
+    vendor,
+    round_label: roundLabel,
+    filename: file.name,
+  });
+  if (vendorName) qs.set("vendor_name", vendorName);
+  return handleJson(await fetch(
+    `/api/uploads/${encodeURIComponent(projectId)}/files?${qs.toString()}`,
+    { method: "POST", body: file, headers: { "Content-Type": "application/octet-stream" } },
+  ));
 }
 
 export async function removeUploadFile(projectId: string, submissionId: string) {

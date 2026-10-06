@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from io import BytesIO
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from backend.excel_boq.parser import parse_workbook
 from backend.uploads.models import (
@@ -164,13 +164,23 @@ def _match_or_create_line(boq: UploadedBoq, item_no: str | None, description: st
 @router.post("/uploads/{project_id}/files", status_code=201)
 async def add_file(
     project_id: str,
-    file: UploadFile = File(...),
-    vendor: str = Form(...),
-    round_label: str = Form(ORIGINAL),
-    vendor_name: str | None = Form(None),
+    request: Request,
+    vendor: str = Query(...),
+    round_label: str = Query(ORIGINAL),
+    vendor_name: str | None = Query(None),
+    filename: str = Query("upload.xlsx"),
 ):
     """Extract one vendor's priced spreadsheet at one round into the
-    staged BOQ."""
+    staged BOQ.
+
+    The spreadsheet arrives as the raw request body with its metadata in
+    the query string, rather than as a multipart form. That is
+    deliberate: FastAPI's File/Form require python-multipart, which is
+    an extra dependency to install at deploy time, and adding it broke
+    the package install. A single file needs no multipart envelope
+    anyway, so this removes the dependency rather than pinning around
+    it.
+    """
     boq = _require_editable(project_id)
 
     vendor = vendor.strip()
@@ -190,14 +200,14 @@ async def add_file(
                 f"Round must be {ORIGINAL!r} or a number such as '1' or '2', got {round_label!r}.",
             )
 
-    name = file.filename or "upload.xlsx"
+    name = (filename or "upload.xlsx").strip() or "upload.xlsx"
     if not name.lower().endswith(ACCEPTED_SUFFIXES):
         raise HTTPException(
             400,
             f"{name} is not an .xlsx/.xlsm file. "
             "Legacy .xls and PDF submissions are not supported.",
         )
-    payload = await file.read()
+    payload = await request.body()
     if not payload:
         raise HTTPException(400, f"{name} is empty.")
     if len(payload) > MAX_UPLOAD_BYTES:

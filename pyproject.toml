@@ -11,4 +11,8 @@ dependencies = [
     "databricks-sql-connector>=3.0.0",
     "databricks-sdk>=0.30.0",
     "openpyxl>=3.1.5",
+    # Required by FastAPI for the multipart upload endpoints in
+    # backend/api/uploads.py. Without it the app raises at import time
+    # and every endpoint goes down, not just the uploads.
+    "python-multipart>=0.0.9",
 ]

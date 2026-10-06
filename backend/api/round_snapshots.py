@@ -55,7 +55,7 @@ def _fetch_discount_history_lines(rfqnum: str) -> list:
         ) from exc
 
 
-def build_round_snapshots(rfqnum: str) -> dict:
+def build_round_snapshots(rfqnum: str, source=None) -> dict:
     """Returns {"rounds_present": ["original", "1.0", ...], "snapshots":
     {vendor: {round_label: {rfqlinenum: line_cost}}}, "vendors": [...],
     "revisions": [float, ...]}.
@@ -64,8 +64,15 @@ def build_round_snapshots(rfqnum: str) -> dict:
     price appears (never seeded, never revised yet) -- callers treat that
     as "no data for this vendor at this round", not zero.
     """
-    original_lines = _fetch_original_lines(rfqnum)
-    history_rows = _fetch_discount_history_lines(rfqnum)
+    # `source` is the uploaded-BOQ adapter (backend/uploads/source.py).
+    # Absent, this reads Maximo exactly as before; the Maximo path is
+    # unchanged, not re-expressed through the adapter.
+    if source is None:
+        original_lines = _fetch_original_lines(rfqnum)
+        history_rows = _fetch_discount_history_lines(rfqnum)
+    else:
+        original_lines = source.original_lines()
+        history_rows = source.discount_history_lines()
 
     revisions = sorted({float(row.REVISION) for row in history_rows})
     rounds_present = [ORIGINAL] + [str(r) for r in revisions]

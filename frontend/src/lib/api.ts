@@ -446,3 +446,154 @@ export async function generateAiPricing(rfqnum: string, round?: string): Promise
   }
   return res.json();
 }
+
+// ---------------------------------------------------------------------
+// Excel-upload projects (BETA)
+//
+// An uploaded project is created, filled with one file per vendor per
+// round, reviewed and then confirmed. Only after confirming do the
+// analysis tabs read it, and they read it through the same endpoints a
+// Maximo RFQ uses: the project_id is passed where an rfqnum would be.
+// ---------------------------------------------------------------------
+
+export const ORIGINAL_ROUND = "original";
+
+export interface UploadVendor {
+  vendor: string;
+  name: string | null;
+}
+
+export interface UploadSubmission {
+  submission_id: string;
+  vendor: string;
+  round_label: string;
+  filename: string;
+  uploaded_at: string;
+  line_count: number;
+  extracted_total: number | null;
+  stated_total: number | null;
+  reconciles: boolean | null;
+}
+
+export interface UploadLine {
+  line_number: number;
+  item_no: string | null;
+  description: string;
+  unit: string | null;
+  quantity: number | null;
+  section: string | null;
+  // Keyed "<vendor>|<round>".
+  prices: Record<string, { unit_cost: number | null; line_cost: number | null }>;
+}
+
+export interface UploadProject {
+  project_id: string;
+  name: string;
+  source_type: "upload";
+  created_by: string;
+  created_by_label: string | null;
+  created_at: string;
+  confirmed: boolean;
+  confirmed_at: string | null;
+  vendors: UploadVendor[];
+  rounds: string[];
+  line_count: number;
+  submissions: UploadSubmission[];
+  lines: UploadLine[];
+}
+
+export interface UploadProjectListItem {
+  project_id: string;
+  name: string;
+  created_by: string;
+  created_by_label: string | null;
+  created_at: string;
+  confirmed: boolean;
+  vendor_count: number;
+  round_count: number;
+  line_count: number;
+}
+
+export async function createUploadProject(name: string, userId: string, userLabel?: string) {
+  const res = await fetch("/api/uploads", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, user_id: userId, user_label: userLabel ?? null }),
+  });
+  return handleJson<UploadProject>(res);
+}
+
+export async function listUploadProjects(): Promise<{ projects: UploadProjectListItem[] }> {
+  return handleJson(await fetch("/api/uploads"));
+}
+
+export async function getUploadProject(projectId: string): Promise<UploadProject> {
+  return handleJson(await fetch(`/api/uploads/${encodeURIComponent(projectId)}`));
+}
+
+export async function addUploadFile(
+  projectId: string,
+  file: File,
+  vendor: string,
+  roundLabel: string,
+  vendorName?: string,
+): Promise<UploadProject> {
+  const body = new FormData();
+  body.append("file", file);
+  body.append("vendor", vendor);
+  body.append("round_label", roundLabel);
+  if (vendorName) body.append("vendor_name", vendorName);
+  return handleJson(await fetch(`/api/uploads/${encodeURIComponent(projectId)}/files`, {
+    method: "POST",
+    body,
+  }));
+}
+
+export async function removeUploadFile(projectId: string, submissionId: string) {
+  return handleJson<UploadProject>(await fetch(
+    `/api/uploads/${encodeURIComponent(projectId)}/files/${encodeURIComponent(submissionId)}`,
+    { method: "DELETE" },
+  ));
+}
+
+export async function editUploadLine(
+  projectId: string,
+  lineNumber: number,
+  patch: { description?: string; unit?: string; quantity?: number; item_no?: string },
+) {
+  return handleJson<UploadProject>(await fetch(
+    `/api/uploads/${encodeURIComponent(projectId)}/lines/${lineNumber}`,
+    { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(patch) },
+  ));
+}
+
+export async function deleteUploadLine(projectId: string, lineNumber: number) {
+  return handleJson<UploadProject>(await fetch(
+    `/api/uploads/${encodeURIComponent(projectId)}/lines/${lineNumber}`,
+    { method: "DELETE" },
+  ));
+}
+
+export async function editUploadPrice(
+  projectId: string,
+  lineNumber: number,
+  vendor: string,
+  roundLabel: string,
+  unitCost: number | null,
+) {
+  return handleJson<UploadProject>(await fetch(`/api/uploads/${encodeURIComponent(projectId)}/prices`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ line_number: lineNumber, vendor, round_label: roundLabel, unit_cost: unitCost }),
+  }));
+}
+
+export async function confirmUploadProject(projectId: string) {
+  return handleJson<UploadProject>(await fetch(
+    `/api/uploads/${encodeURIComponent(projectId)}/confirm`, { method: "POST" }));
+}
+
+export async function reopenUploadProject(projectId: string) {
+  return handleJson<UploadProject>(await fetch(
+    `/api/uploads/${encodeURIComponent(projectId)}/reopen`, { method: "POST" }));
+}

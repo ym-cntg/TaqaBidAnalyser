@@ -89,6 +89,7 @@ from dataclasses import asdict, dataclass
 from fastapi import APIRouter, HTTPException
 
 from backend.api.round_snapshots import ORIGINAL, build_round_snapshots
+from backend.uploads.resolver import resolve_source
 from backend.db import CATALOG, SCHEMA, escape_sql_literal, get_connection
 
 router = APIRouter()
@@ -353,7 +354,7 @@ def _fetch_user_names(user_ids: set[str]) -> dict[str, str]:
         return {}
 
 
-def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
+def build_comparison(rfqnum: str, round_label: str | None = None, source=None) -> dict:
     """The comparison payload as a plain callable, so other modules (e.g.
     negotiation_report.py) can reuse it via an in-process call rather than
     an HTTP round trip to our own API.
@@ -364,13 +365,22 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
     rounds_present labels -- see the module docstring above for how a
     later round's prices are derived.
     """
-    vendor_names = _fetch_vendor_roster(rfqnum)
-    rows = _fetch_quotationlines(rfqnum)
+    # `source` is the uploaded-BOQ adapter (backend/uploads/source.py),
+    # which presents an uploaded BOQ in Maximo's own row shape. Absent,
+    # every fetch below hits Maximo exactly as before. Everything after
+    # this block is shared: the flagging, the outlier baseline and the
+    # round handling are the same code for both sources.
+    if source is None:
+        vendor_names = _fetch_vendor_roster(rfqnum)
+        rows = _fetch_quotationlines(rfqnum)
+    else:
+        vendor_names = source.vendor_roster()
+        rows = source.quotationlines()
 
     if not rows and not vendor_names:
         raise HTTPException(status_code=404, detail=f"Unknown RFQNUM {rfqnum!r}")
 
-    round_data = build_round_snapshots(rfqnum)
+    round_data = build_round_snapshots(rfqnum, source=source)
     rounds_present = round_data["rounds_present"]
     selected_round = round_label or ORIGINAL
     if selected_round not in rounds_present:
@@ -758,4 +768,4 @@ def build_comparison(rfqnum: str, round_label: str | None = None) -> dict:
 
 @router.get("/rfqs/{rfqnum}/comparison")
 async def get_comparison(rfqnum: str, round: str | None = None):
-    return build_comparison(rfqnum, round_label=round)
+    return build_comparison(rfqnum, round_label=round, source=resolve_source(rfqnum))

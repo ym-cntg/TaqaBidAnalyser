@@ -10,10 +10,13 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   ApiError,
   createProject,
+  createUploadProject,
   getProjects,
   getRfqs,
+  listUploadProjects,
   type ProjectSummary,
   type RfqSummary,
+  type UploadProjectListItem,
 } from "@/lib/api";
 import { BOQ_CATEGORY_BADGE_VARIANT, BOQ_CATEGORY_LABELS } from "@/lib/boq-category";
 import { formatDate } from "@/lib/format";
@@ -39,6 +42,12 @@ export default function Home() {
   const [nameInput, setNameInput] = useState("");
 
   const [projects, setProjects] = useState<ProjectSummary[] | null>(null);
+  // Uploaded projects live in their own store, not bid_analyzer_projects,
+  // so they are listed separately and merged into the same grid.
+  const [uploads, setUploads] = useState<UploadProjectListItem[]>([]);
+  const [uploadName, setUploadName] = useState("");
+  const [uploadBusy, setUploadBusy] = useState(false);
+  const [mode, setMode] = useState<"maximo" | "upload">("maximo");
   const [listStatus, setListStatus] = useState<"loading" | "ok" | "error">("loading");
   const [listError, setListError] = useState<string | null>(null);
 
@@ -58,6 +67,14 @@ export default function Home() {
         }
       });
   }
+
+  // Fail-soft: uploaded projects are a BETA extra, so a failure to
+  // list them must not take out the main projects page.
+  useEffect(() => {
+    listUploadProjects()
+      .then((r) => setUploads(r.projects))
+      .catch(() => setUploads([]));
+  }, []);
 
   useEffect(() => {
     tryResolveIdentity();
@@ -167,10 +184,74 @@ export default function Home() {
         <div className="mb-6">
           <Button onClick={() => setPanelOpen((v) => !v)}>{panelOpen ? "Cancel" : "New project"}</Button>
           {panelOpen && (
-            <CreateProjectPanel
-              userId={identity.userId}
-              onCreated={(project) => router.push(`/projects/${project.project_id}`)}
-            />
+            <div className="mt-3 rounded-xl border border-border/60 bg-card p-4">
+              <p className="mb-2 text-sm font-medium">Where is the pricing coming from?</p>
+              <div className="mb-4 flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant={mode === "maximo" ? "default" : "outline"}
+                  onClick={() => setMode("maximo")}
+                >
+                  Select an RFQ from Maximo
+                </Button>
+                <Button
+                  size="sm"
+                  variant={mode === "upload" ? "default" : "outline"}
+                  onClick={() => setMode("upload")}
+                >
+                  Upload vendor Excel files
+                  <Badge variant="secondary" className="ml-1 bg-amber-500/15 text-amber-700">
+                    BETA
+                  </Badge>
+                </Button>
+              </div>
+
+              {mode === "maximo" ? (
+                <CreateProjectPanel
+                  userId={identity.userId}
+                  onCreated={(project) => router.push(`/projects/${project.project_id}`)}
+                />
+              ) : (
+                <div className="space-y-3">
+                  <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-800">
+                    <strong>Under active testing and development.</strong>{" "}
+                    Check every extracted figure before confirming, and use the Maximo path for any
+                    evaluation that counts. Uploaded BOQs are lost if the app restarts.
+                  </div>
+                  <div className="flex flex-wrap items-end gap-2">
+                    <label className="text-xs">
+                      <span className="mb-1 block text-muted-foreground">Project name</span>
+                      <input
+                        value={uploadName}
+                        onChange={(e) => setUploadName(e.target.value)}
+                        placeholder="D-111808 Lot 1"
+                        className="h-8 w-72 rounded-lg border border-border bg-background px-2 text-sm"
+                      />
+                    </label>
+                    <Button
+                      disabled={uploadBusy || !uploadName.trim()}
+                      onClick={async () => {
+                        setUploadBusy(true);
+                        try {
+                          const created = await createUploadProject(
+                            uploadName.trim(),
+                            identity.userId,
+                            identity.displayName,
+                          );
+                          router.push(`/uploads/${created.project_id}`);
+                        } catch (err) {
+                          setListError(err instanceof Error ? err.message : String(err));
+                        } finally {
+                          setUploadBusy(false);
+                        }
+                      }}
+                    >
+                      {uploadBusy ? "Creating\u2026" : "Create and upload files"}
+                    </Button>
+                  </div>
+                </div>
+              )}
+            </div>
           )}
         </div>
 
@@ -186,11 +267,38 @@ export default function Home() {
 
         {listStatus === "ok" && projects && (
           <>
-            {projects.length === 0 ? (
+            {uploads.length > 0 && (
+              <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {uploads.map((u) => (
+                  <Link
+                    key={u.project_id}
+                    href={u.confirmed ? `/projects/${u.project_id}` : `/uploads/${u.project_id}`}
+                  >
+                    <Card className="h-full cursor-pointer border-amber-500/40 transition-shadow hover:shadow-md">
+                      <CardHeader>
+                        <CardTitle className="flex items-center gap-2">
+                          {u.name}
+                          <Badge variant="secondary" className="bg-amber-500/15 text-amber-700">
+                            BETA
+                          </Badge>
+                        </CardTitle>
+                      </CardHeader>
+                      <CardContent className="space-y-1 text-sm text-muted-foreground">
+                        <p>Uploaded Excel · {u.vendor_count} vendor{u.vendor_count === 1 ? "" : "s"} · {u.line_count} lines</p>
+                        <p>{u.confirmed ? "Confirmed, analysis ready" : "Draft, needs review and confirming"}</p>
+                        <p className="text-xs">{u.created_by_label ?? u.created_by}</p>
+                      </CardContent>
+                    </Card>
+                  </Link>
+                ))}
+              </div>
+            )}
+
+            {projects.length === 0 && uploads.length === 0 ? (
               <p className="text-center py-12 text-muted-foreground">
-                No projects yet — create one to get started.
+                No projects yet. Create one to get started.
               </p>
-            ) : (
+            ) : projects.length === 0 ? null : (
               <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
                 {projects.map((p) => (
                   <Link key={p.project_id} href={`/projects/${p.project_id}`}>

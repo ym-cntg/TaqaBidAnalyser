@@ -24,6 +24,7 @@ from datetime import datetime, timezone
 from io import BytesIO
 
 import openpyxl
+from backend.uploads.resolver import resolve_source
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
 from openpyxl.styles import Font
@@ -173,9 +174,9 @@ def _pick_top_issues(issues: list[dict], cap: int) -> list[dict]:
     return [issues[i] for i in picked_idx]
 
 
-def build_negotiation_report(rfqnum: str) -> dict:
-    comparison = build_comparison(rfqnum)
-    round_trend = build_round_trend(rfqnum)
+def build_negotiation_report(rfqnum: str, source=None) -> dict:
+    comparison = build_comparison(rfqnum, source=source)
+    round_trend = build_round_trend(rfqnum, source=source)
 
     has_round_data = len(round_trend["rounds_present"]) >= 2
 
@@ -283,12 +284,12 @@ def _build_excel(report: dict) -> BytesIO:
 
 @router.get("/rfqs/{rfqnum}/negotiation-report")
 async def get_negotiation_report(rfqnum: str):
-    return build_negotiation_report(rfqnum)
+    return build_negotiation_report(rfqnum, source=resolve_source(rfqnum))
 
 
 @router.get("/rfqs/{rfqnum}/negotiation-report.xlsx")
 async def get_negotiation_report_excel(rfqnum: str):
-    report = build_negotiation_report(rfqnum)
+    report = build_negotiation_report(rfqnum, source=resolve_source(rfqnum))
     buf = _build_excel(report)
     return StreamingResponse(
         buf,

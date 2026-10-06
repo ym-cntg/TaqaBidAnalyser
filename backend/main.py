@@ -17,6 +17,7 @@ from backend.api.partial_bids import router as partial_bids_router
 from backend.api.projects import router as projects_router
 from backend.api.rfqs import router as rfqs_router
 from backend.api.rounds import router as rounds_router
+from backend.api.uploads import router as uploads_router
 from backend.api.users import router as users_router
 from backend.db import CATALOG, SCHEMA, get_connection
 
@@ -43,6 +44,7 @@ app.add_middleware(
 
 app.include_router(rfqs_router, prefix="/api")
 app.include_router(users_router, prefix="/api")
+app.include_router(uploads_router, prefix="/api")
 app.include_router(projects_router, prefix="/api")
 app.include_router(comparison_router, prefix="/api")
 app.include_router(ai_pricing_router, prefix="/api")

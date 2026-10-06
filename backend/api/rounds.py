@@ -25,6 +25,7 @@ from fastapi import APIRouter, HTTPException
 
 from backend.api.comparison import _fetch_vendor_roster
 from backend.api.round_snapshots import ORIGINAL, build_round_snapshots
+from backend.uploads.resolver import resolve_source
 from backend.db import CATALOG, SCHEMA, escape_sql_literal, get_connection
 
 router = APIRouter()
@@ -107,22 +108,34 @@ def _fetch_discount_history_dates(rfqnum: str) -> dict[tuple[str, float], str | 
     return out
 
 
-def build_round_trend(rfqnum: str) -> dict:
+def build_round_trend(rfqnum: str, source=None) -> dict:
     """The round-trend payload as a plain callable, so other modules
     (e.g. negotiation_report.py) can reuse it via an in-process call
     rather than an HTTP round trip to our own API."""
-    vendor_names = _fetch_vendor_roster(rfqnum)
-    round_data = build_round_snapshots(rfqnum)
+    # See build_comparison() for what `source` is. An uploaded BOQ has
+    # no discount history to date, so history_dates is empty for it:
+    # the trend and its flags are built purely from the round snapshots,
+    # which the adapter synthesises from the uploaded rounds.
+    if source is None:
+        vendor_names = _fetch_vendor_roster(rfqnum)
+        history_dates = _fetch_discount_history_dates(rfqnum)
+    else:
+        vendor_names = source.vendor_roster()
+        history_dates = {}
+    round_data = build_round_snapshots(rfqnum, source=source)
     rounds_present = round_data["rounds_present"]
     snapshots = round_data["snapshots"]
     vendors = round_data["vendors"]
     revisions = round_data["revisions"]
-    history_dates = _fetch_discount_history_dates(rfqnum)
 
     if not vendors and not vendor_names:
         raise HTTPException(status_code=404, detail=f"Unknown RFQNUM {rfqnum!r}")
 
-    line_descriptions = _fetch_line_descriptions(rfqnum)
+    line_descriptions = (
+        _fetch_line_descriptions(rfqnum)
+        if source is None
+        else {l.RFQLINENUM: (l.DESCRIPTION or "") for l in source.quotationlines()}
+    )
 
     # Flags: compare consecutive present rounds, per vendor, per line.
     flags: list[RoundFlag] = []
@@ -219,4 +232,4 @@ def build_round_trend(rfqnum: str) -> dict:
 
 @router.get("/rfqs/{rfqnum}/rounds")
 async def get_round_trend(rfqnum: str):
-    return build_round_trend(rfqnum)
+    return build_round_trend(rfqnum, source=resolve_source(rfqnum))

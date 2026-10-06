@@ -55,6 +55,7 @@ from statistics import median
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service.serving import ChatMessage, ChatMessageRole
+from backend.uploads.resolver import resolve_source
 from fastapi import APIRouter, HTTPException
 
 from backend.api.comparison import build_comparison
@@ -314,7 +315,7 @@ def _query_batch(
     return _apply_safety_net(parsed, valid_linenums, qty_by_line), None
 
 
-def build_ai_pricing(rfqnum: str, round_label: str | None = None) -> dict:
+def build_ai_pricing(rfqnum: str, round_label: str | None = None, source=None) -> dict:
     """The AI-pricing payload as a plain callable, mirroring
     negotiation_narrative.py's pattern. Always a fresh call -- no
     caching, no persistence anywhere, and never triggered by a page
@@ -325,7 +326,7 @@ def build_ai_pricing(rfqnum: str, round_label: str | None = None) -> dict:
     back to the peer-median heuristic, and the caller is told so.
     """
     try:
-        comparison = build_comparison(rfqnum, round_label=round_label)
+        comparison = build_comparison(rfqnum, round_label=round_label, source=source)
     except HTTPException:
         raise
     except Exception as exc:
@@ -421,7 +422,7 @@ def build_ai_pricing(rfqnum: str, round_label: str | None = None) -> dict:
 @router.post("/rfqs/{rfqnum}/comparison/ai-pricing")
 async def generate_ai_pricing(rfqnum: str, round: str | None = None):
     try:
-        return build_ai_pricing(rfqnum, round_label=round)
+        return build_ai_pricing(rfqnum, round_label=round, source=resolve_source(rfqnum))
     except HTTPException:
         raise
     except Exception as exc:

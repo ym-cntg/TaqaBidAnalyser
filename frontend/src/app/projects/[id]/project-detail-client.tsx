@@ -35,17 +35,25 @@ export function ProjectDetailClient({ projectId }: { projectId: string }) {
         setStatus("ok");
       })
       .catch((err) => {
-        if (err instanceof ApiError && err.status === 404) {
-          getUploadProject(projectId)
-            .then((u) => {
-              setUpload(u);
-              setStatus("ok");
-            })
-            .catch(() => setStatus("not-found"));
-          return;
-        }
-        setError(err instanceof Error ? err.message : String(err));
-        setStatus("error");
+        // Any failure here is a reason to look in the upload store, not
+        // just a 404. An uploaded project is never a row in
+        // bid_analyzer_projects, and that table is grant-blocked, so
+        // the lookup returns 503 rather than 404 in exactly the
+        // environment uploads are most useful in. Only if the upload
+        // store misses too is the original error the real one.
+        getUploadProject(projectId)
+          .then((u) => {
+            setUpload(u);
+            setStatus("ok");
+          })
+          .catch(() => {
+            if (err instanceof ApiError && err.status === 404) {
+              setStatus("not-found");
+              return;
+            }
+            setError(err instanceof Error ? err.message : String(err));
+            setStatus("error");
+          });
       });
   }, [projectId]);
 

@@ -355,6 +355,10 @@ export interface NegotiationReportResponse {
   rfqnum: string;
   generated_at: string;
   has_round_data: boolean;
+  // The round every total and ranking reflects: the latest one present,
+  // not the original quote.
+  round: string;
+  rounds_present: string[];
   vendors: NegotiationVendorSummary[];
   not_submitted: NotSubmittedVendor[];
 }

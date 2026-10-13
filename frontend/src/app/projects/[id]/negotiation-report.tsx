@@ -4,6 +4,7 @@ import { Download, Sparkles } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
+import { formatRoundLabel } from "@/lib/rounds";
 import { Button } from "@/components/ui/button";
 import {
   AiUnavailableError,
@@ -177,11 +178,23 @@ export function NegotiationReport({ rfqnum }: { rfqnum: string }) {
       <AiSummaryCard rfqnum={rfqnum} data={data} />
 
       <div className="flex flex-wrap items-center justify-between gap-4">
-        <p className="text-sm text-muted-foreground">
-          Ranked by contract total, lowest first. Not a recommendation — the numbers and flags
-          below are for the analyst to weigh.
-          {!data.has_round_data && " No negotiation-round history for this RFQ yet, so round flags are all zero."}
-        </p>
+        <div className="text-sm text-muted-foreground">
+          <p className="flex flex-wrap items-center gap-2">
+            <span className="font-medium text-foreground">
+              Pricing as at {formatRoundLabel(data.round)}
+            </span>
+            {data.has_round_data && (
+              <Badge variant="outline" className="text-[10px]">
+                latest of {data.rounds_present.length} rounds
+              </Badge>
+            )}
+          </p>
+          <p className="mt-1">
+            Ranked by contract total, lowest first. Not a recommendation: the numbers and flags
+            below are for the analyst to weigh.
+            {!data.has_round_data && " No negotiation-round history for this RFQ yet, so round flags are all zero."}
+          </p>
+        </div>
         <a href={negotiationReportExportUrl(rfqnum)}>
           <Button variant="outline" size="sm">
             <Download className="h-4 w-4" /> Download Excel

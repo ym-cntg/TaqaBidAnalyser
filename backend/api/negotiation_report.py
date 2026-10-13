@@ -175,10 +175,21 @@ def _pick_top_issues(issues: list[dict], cap: int) -> list[dict]:
 
 
 def build_negotiation_report(rfqnum: str, source=None) -> dict:
-    comparison = build_comparison(rfqnum, source=source)
+    # The report is negotiation prep, so it has to reflect what each
+    # vendor is offering NOW, not what they opened with. This used to
+    # call build_comparison() with no round, which silently defaults to
+    # the original quote, so every total and ranking came from round
+    # zero and ignored every discount since.
     round_trend = build_round_trend(rfqnum, source=source)
+    rounds_present = round_trend["rounds_present"]
+    # rounds_present is ORIGINAL followed by revisions in ascending
+    # order, so the last entry is the latest round. On a tender with no
+    # negotiation yet it is ORIGINAL, which is then correct rather than
+    # a fallback.
+    latest_round = rounds_present[-1] if rounds_present else None
+    comparison = build_comparison(rfqnum, round_label=latest_round, source=source)
 
-    has_round_data = len(round_trend["rounds_present"]) >= 2
+    has_round_data = len(rounds_present) >= 2
 
     round_critical_counts: dict[str, int] = {}
     round_warning_counts: dict[str, int] = {}
@@ -232,9 +243,25 @@ def build_negotiation_report(rfqnum: str, source=None) -> dict:
         "rfqnum": rfqnum,
         "generated_at": _iso(datetime.now(timezone.utc)),
         "has_round_data": has_round_data,
+        # Which round every total and ranking below reflects. Returned
+        # so the reader never has to guess, and so a report taken into a
+        # meeting can be checked against the round it came from.
+        "round": comparison["round"],
+        "rounds_present": rounds_present,
         "vendors": [asdict(v) for v in vendors],
         "not_submitted": comparison["not_submitted"],
     }
+
+
+def _round_label(round_value) -> str:
+    """"original" reads as jargon on an exported sheet; a round number
+    reads as "Round 2"."""
+    if round_value in (None, "", "original"):
+        return "Original bid"
+    try:
+        return f"Round {int(float(round_value))}"
+    except (TypeError, ValueError):
+        return str(round_value)
 
 
 def _build_excel(report: dict) -> BytesIO:
@@ -242,6 +269,11 @@ def _build_excel(report: dict) -> BytesIO:
 
     ws_summary = wb.active
     ws_summary.title = "Summary"
+    # Which round the figures below are from, stated on the sheet
+    # itself: this workbook gets emailed around and printed, detached
+    # from the page that produced it.
+    ws_summary.append([f"RFQ {report['rfqnum']}  |  Pricing as at: {_round_label(report.get('round'))}"])
+    ws_summary.append([])
     ws_summary.append(
         [
             "Vendor", "Name", "Rank", "Contract Total", "% Above Lowest",

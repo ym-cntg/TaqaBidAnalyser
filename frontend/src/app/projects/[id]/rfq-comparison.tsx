@@ -75,6 +75,11 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
   const [disqualifyError, setDisqualifyError] = useState<string | null>(null);
 
   const [aiState, setAiState] = useState<AiPricingState>({ status: "idle" });
+  // Line total is the default because that is what sums to a contract
+  // total. Unit rate is what you actually negotiate on, since it is
+  // comparable across tenders in a way a quantity-dependent total is
+  // not.
+  const [priceView, setPriceView] = useState<"total" | "unit">("total");
 
   const [partialSaving, setPartialSaving] = useState<string | null>(null);
   const [partialError, setPartialError] = useState<string | null>(null);
@@ -476,6 +481,16 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
             Check &quot;Partial bid&quot; on a vendor who was only expected to price part of the BOQ
           </span>
         )}
+        <label className="flex items-center gap-1.5 cursor-pointer font-medium text-foreground">
+          <input
+            id="unit-rate-view"
+            type="checkbox"
+            className="h-3.5 w-3.5 cursor-pointer"
+            checked={priceView === "unit"}
+            onChange={(e) => setPriceView(e.target.checked ? "unit" : "total")}
+          />
+          Show unit rates instead of line totals
+        </label>
       </div>
 
       {data.truncated && (
@@ -549,6 +564,9 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
                     className="px-3 py-3 text-right text-xs font-semibold uppercase tracking-wide text-muted-foreground w-32"
                   >
                     {vendorLabel(v.vendor, v.name)}
+                    <span className="block text-[10px] font-normal normal-case opacity-70">
+                      {priceView === "unit" ? "unit rate" : "line total"}
+                    </span>
                   </th>
                 ))}
                 {aiState.status === "ok" && (
@@ -567,10 +585,18 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
                 // unquoted, and technically disqualified cells -- same
                 // exclusions the backend already applies to is_lowest,
                 // kept consistent here.
+                //
+                // Derived from whichever figure is on screen. Normally
+                // the two orderings agree, since line total is unit
+                // rate times a quantity shared across vendors. They can
+                // diverge when vendors submitted different quantities
+                // for the same line, and in that case the colouring
+                // should mark the cheapest of what the reader is
+                // actually looking at.
                 const lineCosts = data.vendors.map((v) => {
                   const cellP = line.prices[v.vendor];
                   if (!cellP || cellP.unquoted || cellP.zero_price || cellP.technically_disqualified) return null;
-                  return cellP.line_cost;
+                  return priceView === "unit" ? cellP.unit_cost : cellP.line_cost;
                 });
                 return (
                   <tr
@@ -589,7 +615,13 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
                       <PriceCell
                         key={v.vendor}
                         p={line.prices[v.vendor]}
-                        colorClass={priceColor(line.prices[v.vendor]?.line_cost ?? null, lineCosts)}
+                        colorClass={priceColor(
+                          (priceView === "unit"
+                            ? line.prices[v.vendor]?.unit_cost
+                            : line.prices[v.vendor]?.line_cost) ?? null,
+                          lineCosts,
+                        )}
+                        showUnit={priceView === "unit"}
                         editable={!!identity && isOriginalRound}
                         isEditing={editing?.rfqlinenum === line.rfqlinenum && editing?.vendor === v.vendor}
                         editValue={editValue}
@@ -612,7 +644,12 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
                         onCancelDisqualify={cancelDisqualify}
                       />
                     ))}
-                    {aiState.status === "ok" && <AiPriceCell estimate={aiState.lines.get(line.rfqlinenum)} />}
+                    {aiState.status === "ok" && (
+                      <AiPriceCell
+                        estimate={aiState.lines.get(line.rfqlinenum)}
+                        showUnit={priceView === "unit"}
+                      />
+                    )}
                   </tr>
                 );
               })}
@@ -670,6 +707,7 @@ export function RfqComparison({ rfqnum }: { rfqnum: string }) {
 function PriceCell({
   p,
   colorClass,
+  showUnit,
   editable,
   isEditing,
   editValue,
@@ -691,6 +729,7 @@ function PriceCell({
 }: {
   p: ComparisonLinePrice | undefined;
   colorClass: string;
+  showUnit: boolean;
   editable: boolean;
   isEditing: boolean;
   editValue: string;
@@ -725,6 +764,7 @@ function PriceCell({
                 if (e.key === "Enter") onSave();
                 if (e.key === "Escape") onCancel();
               }}
+              title="Enter a unit rate, not a line total"
               className="w-20 rounded border border-input bg-background px-1.5 py-0.5 text-right text-xs outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
             />
             <button onClick={onSave} disabled={saving} title="Save" className="text-green-600 hover:text-green-700">
@@ -734,6 +774,7 @@ function PriceCell({
               <X className="w-3.5 h-3.5" />
             </button>
           </div>
+          <span className="text-[10px] text-muted-foreground">unit rate</span>
           {editError && <span className="text-[10px] text-red-600 max-w-[140px] text-right">{editError}</span>}
         </div>
       </td>
@@ -853,7 +894,7 @@ function PriceCell({
           />
         )}
         <span>
-          {empty ? "—" : formatAED(p!.line_cost)}
+          {empty ? "—" : formatAED(showUnit ? p!.unit_cost : p!.line_cost)}
           {!empty && p!.corrected && (
             <span
               className="text-amber-500 ml-0.5"
@@ -882,7 +923,13 @@ const CONFIDENCE_STYLE: Record<string, string> = {
 // decision: the column presents a single "AI price" and does not
 // distinguish how each figure was derived. The response still carries
 // `source` per line if that distinction is ever needed again.
-function AiPriceCell({ estimate }: { estimate: AiLineEstimate | undefined }) {
+function AiPriceCell({
+  estimate,
+  showUnit,
+}: {
+  estimate: AiLineEstimate | undefined;
+  showUnit: boolean;
+}) {
   if (!estimate) {
     return <td className="px-3 py-2 text-right font-mono text-xs text-muted-foreground/50 italic">—</td>;
   }
@@ -891,7 +938,7 @@ function AiPriceCell({ estimate }: { estimate: AiLineEstimate | undefined }) {
       className={`px-3 py-2 text-right font-mono text-xs whitespace-nowrap ${CONFIDENCE_STYLE[estimate.confidence] ?? "italic"}`}
       title={`${estimate.confidence} confidence: ${estimate.rationale}`}
     >
-      {formatAED(estimate.line_cost)}
+      {formatAED(showUnit ? estimate.unit_cost : estimate.line_cost)}
     </td>
   );
 }

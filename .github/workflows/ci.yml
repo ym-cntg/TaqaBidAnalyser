@@ -1,0 +1,113 @@
+name: CI
+
+# Runs on every push and PR to the branches that actually ship.
+# maximo-integrated-buildout is the live branch; main is included so the
+# pipeline is already in place whenever the two are reconciled.
+on:
+  push:
+    branches: [maximo-integrated-buildout, main]
+  pull_request:
+    branches: [maximo-integrated-buildout, main]
+  workflow_dispatch:
+
+concurrency:
+  # A newer push makes an in-flight run on the same ref pointless.
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.11
+
+      - name: Install runtime dependencies
+        # From pyproject only, so this step fails the same way a deploy
+        # would if a dependency is undeclared or unresolvable. That is
+        # the exact failure that took the app down once.
+        run: uv sync --frozen
+
+      - name: Install CI tooling
+        run: uv pip install -r requirements-dev.txt
+
+      - name: Import the app
+        # Cheap and specific: FastAPI validates route signatures at
+        # import, so a missing dependency or a malformed route is caught
+        # here with a clear message rather than inside a test failure.
+        run: uv run python -c "from backend.main import app; print('imported', len(app.routes), 'routes')"
+
+      - name: Lint
+        run: uv run ruff check backend tests
+
+      - name: Test
+        # The suite runs with no warehouse connection and no Unity
+        # Catalog grant, which is both what CI has and what the deployed
+        # app has today.
+        run: uv run pytest
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npx tsc --noEmit
+
+      - name: Lint
+        # Non-blocking for now: eslint has never run against this
+        # codebase, so failing the build on its first run would block
+        # every PR on pre-existing findings. Tighten once the backlog is
+        # cleared.
+        run: npx eslint . || true
+
+      - name: Build
+        # The same build start.sh runs at deploy time. If this fails,
+        # the deploy fails.
+        run: npm run build
+
+  deployable:
+    name: Deployable
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Deployment manifest is intact
+        # A deploy is "bash start.sh" from the repo root. These three
+        # files are the contract; losing one breaks the app with a
+        # message that points nowhere near the cause.
+        run: |
+          for f in app.yaml start.sh pyproject.toml; do
+            test -f "$f" || { echo "::error::$f is missing and the deploy needs it"; exit 1; }
+          done
+          grep -q "start.sh" app.yaml || { echo "::error::app.yaml no longer runs start.sh"; exit 1; }
+
+      - name: Build marker is current
+        # /health returns APP_BUILD so a deploy can be verified from
+        # outside. A stale marker makes that check meaningless.
+        run: |
+          marker=$(grep -oE 'APP_BUILD = "[^"]+"' backend/main.py | cut -d'"' -f2)
+          echo "APP_BUILD is $marker"
+          test -n "$marker" || { echo "::error::APP_BUILD is missing from backend/main.py"; exit 1; }

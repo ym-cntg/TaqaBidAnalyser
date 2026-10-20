@@ -1,5 +1,7 @@
 """FastAPI application entry point."""
 
+import os
+
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -26,7 +28,14 @@ from backend.db import CATALOG, SCHEMA, get_connection
 # otherwise unanswerable from outside the workspace: a git push does not
 # redeploy a Databricks App, so the running code and the branch head can
 # silently disagree.
-APP_BUILD = "2026-09-22-ai-pricing-timeout-budget"
+APP_BUILD = "2026-10-20-unit-rate-view"
+
+# Stamped by the deploy workflow with the commit being released, so a
+# deployment can be verified from outside the workspace: poll /health
+# and check this equals the SHA you deployed. Without it, a git push and
+# a running app can silently disagree, which has already cost a round of
+# debugging. Falls back to "local" when nothing set it.
+APP_COMMIT = os.environ.get("APP_COMMIT", "local")
 
 app = FastAPI(
     title="TAQA Maximo Integration",
@@ -58,7 +67,7 @@ app.include_router(negotiation_narrative_router, prefix="/api")
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "build": APP_BUILD}
+    return {"status": "ok", "build": APP_BUILD, "commit": APP_COMMIT}
 
 
 @app.get("/api/rfq-count")

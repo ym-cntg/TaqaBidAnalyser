@@ -12,3 +12,25 @@ dependencies = [
     "databricks-sdk>=0.30.0",
     "openpyxl>=3.1.5",
 ]
+
+[tool.pytest.ini_options]
+# `.` on the path so `backend` and `tests` import without installing the
+# project, which is how the app itself runs under start.sh.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+exclude = [".venv", "frontend", "data", "archieved", "src"]
+
+[tool.ruff.lint]
+# Deliberately narrow. This is linting a working codebase late, so it
+# catches real defects (undefined names, unused imports, bare excepts
+# that hide a cause) without churning style across every file.
+select = ["E4", "E7", "E9", "F", "B"]
+ignore = [
+    "E722",  # bare except is used on purpose in the fail-open overlay reads
+    "B008",  # FastAPI dependencies are function calls in defaults by design
+]

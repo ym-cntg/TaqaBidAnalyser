@@ -1,0 +1,128 @@
+name: Deploy
+
+# Manual on purpose. The app is in production and there is only one of
+# it, so a push to the live branch must not redeploy by itself. Switch
+# the staging environment to automatic once a second app exists.
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Target environment
+        required: true
+        default: staging
+        type: choice
+        options: [staging, production]
+      skip_tests:
+        description: Deploy without re-running CI (emergencies only)
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  # Two deploys to the same app at once leaves it in an unknown state.
+  group: deploy-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify
+    if: ${{ !inputs.skip_tests }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+        with: { enable-cache: true }
+      - run: uv python install 3.11
+      - run: uv sync --frozen
+      - run: uv pip install -r requirements-dev.txt
+      - run: uv run pytest
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+        working-directory: frontend
+      - run: npm run build
+        working-directory: frontend
+
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    needs: [verify]
+    # Runs even when verify was skipped, but never when it ran and failed.
+    if: ${{ always() && (needs.verify.result == 'success' || inputs.skip_tests) }}
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.environment }}
+    env:
+      DATABRICKS_HOST: ${{ secrets.DATABRICKS_HOST }}
+      DATABRICKS_CLIENT_ID: ${{ secrets.DATABRICKS_CLIENT_ID }}
+      DATABRICKS_CLIENT_SECRET: ${{ secrets.DATABRICKS_CLIENT_SECRET }}
+      APP_NAME: ${{ vars.DATABRICKS_APP_NAME }}
+      WORKSPACE_PATH: ${{ vars.DATABRICKS_SOURCE_PATH }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the deploy is configured
+        run: |
+          missing=""
+          for k in DATABRICKS_HOST DATABRICKS_CLIENT_ID DATABRICKS_CLIENT_SECRET APP_NAME WORKSPACE_PATH; do
+            [ -n "${!k}" ] || missing="$missing $k"
+          done
+          if [ -n "$missing" ]; then
+            echo "::error::Not configured yet. Set these for the '${{ inputs.environment }}' environment:$missing"
+            echo "Secrets: DATABRICKS_HOST, DATABRICKS_CLIENT_ID, DATABRICKS_CLIENT_SECRET"
+            echo "Variables: DATABRICKS_APP_NAME, DATABRICKS_SOURCE_PATH"
+            exit 1
+          fi
+
+      - name: Stamp the commit being deployed
+        # /health reports this back, which is what makes the smoke test
+        # below able to prove the new code is actually live rather than
+        # just that something is running.
+        run: |
+          python3 - "$GITHUB_SHA" <<'PY'
+          import re, sys, pathlib
+          sha = sys.argv[1][:7]
+          p = pathlib.Path("app.yaml")
+          text = p.read_text()
+          block = f"  - name: APP_COMMIT\n    value: \"{sha}\"\n"
+          if "APP_COMMIT" in text:
+              text = re.sub(r'  - name: APP_COMMIT\n    value: "[^"]*"\n', block, text)
+          else:
+              text = text.rstrip("\n") + "\n" + block
+          p.write_text(text)
+          print(f"APP_COMMIT stamped as {sha}")
+          PY
+
+      - uses: databricks/setup-cli@main
+
+      - name: Sync source to the workspace
+        run: databricks sync --full . "$WORKSPACE_PATH"
+
+      - name: Deploy the app
+        run: databricks apps deploy "$APP_NAME" --source-code-path "$WORKSPACE_PATH"
+
+      - name: Smoke test the running app
+        # A deploy that reports success but serves the previous build is
+        # the failure mode this exists to catch. start.sh runs npm
+        # install and a Next.js build on boot, so allow a few minutes.
+        env:
+          APP_URL: ${{ vars.DATABRICKS_APP_URL }}
+        run: |
+          if [ -z "$APP_URL" ]; then
+            echo "::warning::DATABRICKS_APP_URL is not set, so the deploy could not be verified."
+            exit 0
+          fi
+          want="${GITHUB_SHA:0:7}"
+          for attempt in $(seq 1 40); do
+            body=$(curl -fsS --max-time 10 "$APP_URL/health" 2>/dev/null || true)
+            got=$(printf '%s' "$body" | sed -n 's/.*"commit":"\([^"]*\)".*/\1/p')
+            if [ "$got" = "$want" ]; then
+              echo "Live and serving $got"
+              exit 0
+            fi
+            echo "attempt $attempt: health says '${got:-no response}', waiting for '$want'"
+            sleep 15
+          done
+          echo "::error::App never reported commit $want. It may still be building, or the deploy did not take."
+          exit 1

@@ -27,3 +27,7 @@ output/
 .cache/
 backend/state/
 scratch/
+
+# Tooling caches
+.ruff_cache/
+.pytest_cache/

@@ -1,0 +1,10 @@
+# Test and lint tooling. CI only.
+#
+# Deliberately NOT in pyproject.toml. Databricks Apps installs from
+# pyproject, and adding a dependency there has already taken the whole
+# app down once (python-multipart, which broke the package install step
+# and therefore every endpoint). Runtime dependencies and CI tooling
+# are kept apart so that can never happen because of a test library.
+pytest>=8.0
+httpx2>=0.1                 # starlette.testclient needs it; not a runtime dependency
+ruff>=0.6

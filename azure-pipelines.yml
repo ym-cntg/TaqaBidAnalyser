@@ -56,13 +56,27 @@ stages:
 
           - powershell: |
               $ErrorActionPreference = 'Stop'
+              # The ADO PowerShell task only fails a step on the LAST
+              # command's exit code. This step runs several, so an early
+              # failure used to go green and the next step died on a
+              # confusing ModuleNotFoundError. Each native command is
+              # therefore checked explicitly.
+              python --version
+
               python -m venv .venv
+              if ($LASTEXITCODE -ne 0) { throw "venv creation failed ($LASTEXITCODE)" }
+
               .\.venv\Scripts\python.exe -m pip install --upgrade pip --quiet
-              # Runtime deps from pyproject, so this step fails the same way a
-              # deploy would if a dependency is undeclared. That is the exact
-              # failure that once took the whole app down.
-              .\.venv\Scripts\python.exe -m pip install --quiet .
-              .\.venv\Scripts\python.exe -m pip install --quiet -r requirements-dev.txt
+              if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed ($LASTEXITCODE)" }
+
+              # Runtime deps from pyproject, so this fails the same way a
+              # deploy would if a dependency is undeclared. That is the
+              # exact failure that once took the whole app down.
+              .\.venv\Scripts\python.exe -m pip install .
+              if ($LASTEXITCODE -ne 0) { throw "runtime dependency install failed ($LASTEXITCODE)" }
+
+              .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
+              if ($LASTEXITCODE -ne 0) { throw "dev dependency install failed ($LASTEXITCODE)" }
             displayName: Install dependencies
 
           - powershell: |

@@ -95,6 +95,14 @@ stages:
         steps:
           - checkout: self
 
+          - task: NodeTool@0
+            # The Default agent has no Node on PATH, so the build cannot
+            # run without this. The task installs it into the agent tool
+            # cache, so only the first run pays the download.
+            displayName: Install Node 20
+            inputs:
+              versionSpec: "20.x"
+
           - powershell: |
               $ErrorActionPreference = 'Stop'
               Set-Location frontend

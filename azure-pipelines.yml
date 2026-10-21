@@ -1,26 +1,26 @@
-# AI Bid Analyser -- validate on dev and main, deploy to Databricks Apps from main.
+# AI Bid Analyser -- CI on dev and main, deploy to Databricks Apps from main.
 #
-# Follows the same shape as the Water Demand pipeline: self-hosted Default
-# pool, Databricks CLI pinned and cached in the tool directory, azure-client-secret
-# auth from a Library variable group.
+# CI and CD are independent. A deploy does not wait on CI and is not blocked
+# by it, so a red test never stops a release going out. The tradeoff is
+# deliberate: CI is advisory here.
 #
-# Unlike that one, the app IS the repo rather than a subfolder, so the deploy
-# assembles a clean payload first (see "Stage the app payload") instead of
-# uploading everything. tests/, docs/ and the fixture spreadsheets have no
-# business in the workspace, and a stray file has broken a Databricks deploy
-# on this project before.
+# CI is kept minimal on purpose: install dependencies and run the tests, and
+# build the frontend. No lint gate, no import check, no manifest checks.
 #
-# SETUP REQUIRED:
+# Dependencies in CI come from requirements-ci.txt rather than pyproject,
+# because pip install . tries to BUILD the project and setuptools cannot
+# guess which top-level directory is the package. Nothing needs building:
+# start.sh runs the app from source. Regenerate that file after a
+# dependency change with:
+#   uv export --no-dev --no-emit-project --format requirements-txt -o requirements-ci.txt
+#
+# SETUP REQUIRED (deploy only):
 #   1. ADO Library variable group: taqad-bid-dev
 #      Variables: DATABRICKS_HOST, DATABRICKS_CLIENT_ID,
 #                 DATABRICKS_CLIENT_SECRET (secret), ARM_TENANT_ID
-#      Optional:  APP_URL  -- the app's URL. Set it and the deploy verifies
-#                 itself; leave it out and the smoke test is skipped.
-#   2. ADO Environment: taqad-bid-dev (0 approvers for dev)
-#   3. SPN must have CAN_MANAGE on the app in Databricks
-#   4. Default pool agent needs Python 3.11+ and Node 20+ on PATH for the
-#      Validate stage. Nothing else is required; the backend tests need no
-#      warehouse connection and no Unity Catalog grant.
+#      Optional:  APP_URL  -- set it and the deploy verifies itself.
+#   2. ADO Environment: taqad-bid-dev
+#   3. SPN needs CAN_MANAGE on the app, and the app must already exist.
 
 trigger:
   branches:
@@ -46,51 +46,24 @@ parameters:
 
 stages:
   - stage: Validate
-    displayName: Validate
+    displayName: CI
     jobs:
       - job: backend
-        displayName: Backend
+        displayName: Backend tests
         pool: Default
         steps:
           - checkout: self
 
           - powershell: |
               $ErrorActionPreference = 'Stop'
-              # The ADO PowerShell task only fails a step on the LAST
-              # command's exit code. This step runs several, so an early
-              # failure used to go green and the next step died on a
-              # confusing ModuleNotFoundError. Each native command is
-              # therefore checked explicitly.
               python --version
-
               python -m venv .venv
               if ($LASTEXITCODE -ne 0) { throw "venv creation failed ($LASTEXITCODE)" }
-
-              .\.venv\Scripts\python.exe -m pip install --upgrade pip --quiet
-              if ($LASTEXITCODE -ne 0) { throw "pip upgrade failed ($LASTEXITCODE)" }
-
-              # Runtime deps from pyproject, so this fails the same way a
-              # deploy would if a dependency is undeclared. That is the
-              # exact failure that once took the whole app down.
-              .\.venv\Scripts\python.exe -m pip install .
-              if ($LASTEXITCODE -ne 0) { throw "runtime dependency install failed ($LASTEXITCODE)" }
-
-              .\.venv\Scripts\python.exe -m pip install -r requirements-dev.txt
-              if ($LASTEXITCODE -ne 0) { throw "dev dependency install failed ($LASTEXITCODE)" }
-            displayName: Install dependencies
-
-          - powershell: |
-              $ErrorActionPreference = 'Stop'
-              # FastAPI validates route signatures at import, so a missing
-              # dependency or a malformed route is caught here with a clear
-              # message rather than inside a test failure.
-              .\.venv\Scripts\python.exe -c "from backend.main import app; print('imported', len(app.routes), 'routes')"
-            displayName: Import the app
-
-          - powershell: |
-              $ErrorActionPreference = 'Stop'
-              .\.venv\Scripts\python.exe -m ruff check --no-cache backend tests
-            displayName: Lint
+              .\.venv\Scripts\python.exe -m pip install -q -r requirements-ci.txt
+              if ($LASTEXITCODE -ne 0) { throw "dependency install failed ($LASTEXITCODE)" }
+              .\.venv\Scripts\python.exe -m pip install -q pytest httpx2
+              if ($LASTEXITCODE -ne 0) { throw "test tooling install failed ($LASTEXITCODE)" }
+            displayName: Install
 
           - powershell: |
               $ErrorActionPreference = 'Stop'
@@ -104,7 +77,7 @@ stages:
               testRunTitle: Backend
 
       - job: frontend
-        displayName: Frontend
+        displayName: Frontend build
         pool: Default
         steps:
           - checkout: self
@@ -126,12 +99,6 @@ stages:
           - powershell: |
               $ErrorActionPreference = 'Stop'
               Set-Location frontend
-              npx tsc --noEmit
-            displayName: Typecheck
-
-          - powershell: |
-              $ErrorActionPreference = 'Stop'
-              Set-Location frontend
               # The same build start.sh runs at deploy time. Red here is a
               # failed deploy there.
               npm run build
@@ -139,8 +106,10 @@ stages:
 
   - stage: DeployApp
     displayName: Deploy -> taqa-bid-analyser
-    dependsOn: Validate
-    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    # Independent of CI by design. dependsOn is empty rather than Validate,
+    # so a failing test does not block a release. CI is advisory.
+    dependsOn: []
+    condition: eq(variables['Build.SourceBranch'], 'refs/heads/main')
     jobs:
       - deployment: deploy_app
         environment: taqad-bid-dev

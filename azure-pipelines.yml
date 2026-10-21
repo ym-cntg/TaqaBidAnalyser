@@ -1,0 +1,235 @@
+# AI Bid Analyser -- validate on dev and main, deploy to Databricks Apps from main.
+#
+# Follows the same shape as the Water Demand pipeline: self-hosted Default
+# pool, Databricks CLI pinned and cached in the tool directory, azure-client-secret
+# auth from a Library variable group.
+#
+# Unlike that one, the app IS the repo rather than a subfolder, so the deploy
+# assembles a clean payload first (see "Stage the app payload") instead of
+# uploading everything. tests/, docs/ and the fixture spreadsheets have no
+# business in the workspace, and a stray file has broken a Databricks deploy
+# on this project before.
+#
+# SETUP REQUIRED:
+#   1. ADO Library variable group: taqad-bid-dev
+#      Variables: DATABRICKS_HOST, DATABRICKS_CLIENT_ID,
+#                 DATABRICKS_CLIENT_SECRET (secret), ARM_TENANT_ID
+#      Optional:  APP_URL  -- the app's URL. Set it and the deploy verifies
+#                 itself; leave it out and the smoke test is skipped.
+#   2. ADO Environment: taqad-bid-dev (0 approvers for dev)
+#   3. SPN must have CAN_MANAGE on the app in Databricks
+#   4. Default pool agent needs Python 3.11+ and Node 20+ on PATH for the
+#      Validate stage. Nothing else is required; the backend tests need no
+#      warehouse connection and no Unity Catalog grant.
+
+trigger:
+  branches:
+    include:
+      - main
+      - dev
+
+pr:
+  branches:
+    include:
+      - main
+
+parameters:
+  - name: databricksCliVersion
+    type: string
+    default: "1.2.1"
+  - name: appName
+    type: string
+    default: "taqa-bid-analyser"
+  - name: workspacePath
+    type: string
+    default: "/Workspace/apps/taqa-bid-analyser"
+
+stages:
+  - stage: Validate
+    displayName: Validate
+    jobs:
+      - job: backend
+        displayName: Backend
+        pool: Default
+        steps:
+          - checkout: self
+
+          - powershell: |
+              $ErrorActionPreference = 'Stop'
+              python -m venv .venv
+              .\.venv\Scripts\python.exe -m pip install --upgrade pip --quiet
+              # Runtime deps from pyproject, so this step fails the same way a
+              # deploy would if a dependency is undeclared. That is the exact
+              # failure that once took the whole app down.
+              .\.venv\Scripts\python.exe -m pip install --quiet .
+              .\.venv\Scripts\python.exe -m pip install --quiet -r requirements-dev.txt
+            displayName: Install dependencies
+
+          - powershell: |
+              $ErrorActionPreference = 'Stop'
+              # FastAPI validates route signatures at import, so a missing
+              # dependency or a malformed route is caught here with a clear
+              # message rather than inside a test failure.
+              .\.venv\Scripts\python.exe -c "from backend.main import app; print('imported', len(app.routes), 'routes')"
+            displayName: Import the app
+
+          - powershell: |
+              $ErrorActionPreference = 'Stop'
+              .\.venv\Scripts\python.exe -m ruff check --no-cache backend tests
+            displayName: Lint
+
+          - powershell: |
+              $ErrorActionPreference = 'Stop'
+              .\.venv\Scripts\python.exe -m pytest --junitxml=junit-backend.xml
+            displayName: Test
+
+          - task: PublishTestResults@2
+            condition: succeededOrFailed()
+            inputs:
+              testResultsFiles: junit-backend.xml
+              testRunTitle: Backend
+
+      - job: frontend
+        displayName: Frontend
+        pool: Default
+        steps:
+          - checkout: self
+
+          - powershell: |
+              $ErrorActionPreference = 'Stop'
+              Set-Location frontend
+              npm ci
+            displayName: Install
+
+          - powershell: |
+              $ErrorActionPreference = 'Stop'
+              Set-Location frontend
+              npx tsc --noEmit
+            displayName: Typecheck
+
+          - powershell: |
+              $ErrorActionPreference = 'Stop'
+              Set-Location frontend
+              # The same build start.sh runs at deploy time. Red here is a
+              # failed deploy there.
+              npm run build
+            displayName: Build
+
+  - stage: DeployApp
+    displayName: Deploy -> taqa-bid-analyser
+    dependsOn: Validate
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - deployment: deploy_app
+        environment: taqad-bid-dev
+        pool: Default
+        variables:
+          - group: taqad-bid-dev
+        strategy:
+          runOnce:
+            deploy:
+              steps:
+                - checkout: self
+
+                - powershell: |
+                    $ErrorActionPreference = 'Stop'
+                    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+                    $ProgressPreference = 'SilentlyContinue'
+
+                    $version = '${{ parameters.databricksCliVersion }}'
+                    $toolsDir = if ($env:AGENT_TOOLSDIRECTORY) { $env:AGENT_TOOLSDIRECTORY } else { Join-Path $env:AGENT_HOMEDIRECTORY '_tool' }
+                    $installDir = Join-Path $toolsDir "databricks\$version"
+                    $exe = Join-Path $installDir 'databricks.exe'
+
+                    if (-not (Test-Path $exe)) {
+                      New-Item -ItemType Directory -Force -Path $installDir | Out-Null
+                      $tmpDir = if ($env:RUNNER_TEMP) { $env:RUNNER_TEMP } else { $env:TEMP }
+                      $zip = Join-Path $tmpDir "databricks-$version.zip"
+                      $url = "https://github.com/databricks/cli/releases/download/v$version/databricks_cli_${version}_windows_amd64.zip"
+                      Write-Host "Downloading $url"
+                      Invoke-WebRequest -Uri $url -OutFile $zip -UseBasicParsing
+                      Expand-Archive -Path $zip -DestinationPath $installDir -Force
+                      Remove-Item $zip
+                    } else {
+                      Write-Host "databricks.exe already present at $exe -- skipping download"
+                    }
+
+                    Write-Host "##vso[task.prependpath]$installDir"
+                    & $exe --version
+                  displayName: Install Databricks CLI v${{ parameters.databricksCliVersion }}
+
+                - powershell: |
+                    $ErrorActionPreference = 'Stop'
+                    # Only what the app needs at runtime. Everything else
+                    # (tests, fixture spreadsheets, docs, the PDF manual) stays
+                    # out of the workspace.
+                    $payload = Join-Path $env:AGENT_TEMPDIRECTORY 'app-payload'
+                    if (Test-Path $payload) { Remove-Item $payload -Recurse -Force }
+                    New-Item -ItemType Directory -Force -Path $payload | Out-Null
+
+                    foreach ($f in @('app.yaml','start.sh','pyproject.toml','uv.lock')) {
+                      Copy-Item $f -Destination $payload
+                    }
+                    robocopy backend  (Join-Path $payload 'backend')  /E /XD __pycache__ | Out-Null
+                    robocopy frontend (Join-Path $payload 'frontend') /E /XD node_modules .next | Out-Null
+                    # robocopy uses exit codes below 8 for success.
+                    if ($LASTEXITCODE -ge 8) { throw "robocopy failed with $LASTEXITCODE" }
+                    $global:LASTEXITCODE = 0
+
+                    # Stamp the commit so /health can prove which build is
+                    # live. Without it a push and a running app can silently
+                    # disagree, which has already cost a round of debugging.
+                    $sha = "$(Build.SourceVersion)".Substring(0,7)
+                    Add-Content (Join-Path $payload 'app.yaml') "  - name: APP_COMMIT`n    value: `"$sha`""
+                    Write-Host "Payload staged at $payload, APP_COMMIT=$sha"
+                    Write-Host "##vso[task.setvariable variable=payloadPath]$payload"
+                    Write-Host "##vso[task.setvariable variable=deploySha]$sha"
+                  displayName: Stage the app payload
+
+                - powershell: |
+                    $ErrorActionPreference = 'Stop'
+                    Write-Host "Uploading payload to ${{ parameters.workspacePath }}..."
+                    databricks workspace import-dir "$(payloadPath)" ${{ parameters.workspacePath }} --overwrite
+                  displayName: Upload app code to workspace
+                  env:
+                    DATABRICKS_HOST:     $(DATABRICKS_HOST)
+                    ARM_CLIENT_ID:       $(DATABRICKS_CLIENT_ID)
+                    ARM_CLIENT_SECRET:   $(DATABRICKS_CLIENT_SECRET)
+                    ARM_TENANT_ID:       $(ARM_TENANT_ID)
+                    DATABRICKS_AUTH_TYPE: azure-client-secret
+
+                - powershell: |
+                    $ErrorActionPreference = 'Stop'
+                    databricks apps deploy ${{ parameters.appName }} --source-code-path ${{ parameters.workspacePath }}
+                  displayName: Deploy app -> ${{ parameters.appName }}
+                  env:
+                    DATABRICKS_HOST:     $(DATABRICKS_HOST)
+                    ARM_CLIENT_ID:       $(DATABRICKS_CLIENT_ID)
+                    ARM_CLIENT_SECRET:   $(DATABRICKS_CLIENT_SECRET)
+                    ARM_TENANT_ID:       $(ARM_TENANT_ID)
+                    DATABRICKS_AUTH_TYPE: azure-client-secret
+
+                - powershell: |
+                    $ErrorActionPreference = 'Stop'
+                    if (-not $env:APP_URL) {
+                      Write-Host "##vso[task.logissue type=warning]APP_URL not set, so the deploy was not verified."
+                      exit 0
+                    }
+                    # A deploy that reports success while still serving the
+                    # previous build is the failure this catches. start.sh runs
+                    # npm install and a Next.js build on boot, so allow minutes.
+                    $want = "$(deploySha)"
+                    for ($i = 1; $i -le 40; $i++) {
+                      try {
+                        $r = Invoke-RestMethod -Uri "$env:APP_URL/health" -TimeoutSec 10
+                        if ($r.commit -eq $want) { Write-Host "Live and serving $want"; exit 0 }
+                        Write-Host "attempt $i : health says '$($r.commit)', waiting for '$want'"
+                      } catch {
+                        Write-Host "attempt $i : no response yet"
+                      }
+                      Start-Sleep -Seconds 15
+                    }
+                    throw "App never reported commit $want. It may still be building, or the deploy did not take."
+                  displayName: Smoke test the running app
+                  env:
+                    APP_URL: $(APP_URL)
